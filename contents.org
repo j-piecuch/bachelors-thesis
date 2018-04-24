@@ -1,0 +1,49 @@
+ABSTRAKT
+
+Wieloprogramowość jest nieodłączną cechą współczesnych systemów ogólnego zastosowania.
+Z nią wiąże się konieczność efektywnego zarządzania pamięcią fizyczna, jak i zapewnienia
+izolacji między rezydentnymi procesami. Wprowadzenie wirtualnych przestrzeni adresowych
+ze stronicowaniem jest najpopularniejszym sposobem rozwiązania tych problemów.
+Ta praca stanowi przegląd najważniejszych decyzji projektowych oraz wyzwań towarzyszących
+implementacji wirtualnych przestrzeni adresowych ze stronicowaniem. Opisany jest również
+sposób w jaki są one zrealizowane w systemie operacyjnym Mimiker.
+
+* Wstęp
+** Problemy:
+*** Izolacja procesów
+*** Ochrona pamięci
+*** Efektywne wykorzystanie pamięci fizycznej
+** Różne rozwiązania
+*** Do każdego wady, zalety
+*** Najpopularniejsze: stronicowanie
+* Reprezentacja wirtualnej przestrzeni adresowej
+** Jakie wymagania musi spełniać
+** Jakie struktury danych
+** Oddzielenie części zależnej i niezależnej od architektury
+** FreeBSD, Linux
+* Różne organizacje tablicy stron
+** Jakie wymagania
+** Hierarchiczna Co zostało zrobione i jak
+** Odwrócona
+** Wirtualizowana płaska
+** Do każdej plusy i minusy
+* Wsparcie sprzętowe w różnych architekturach
+** x86: dużo rzeczy robionych przez sprzęt
+** MIPS: wszystko robione przez software
+* Problemy
+** TLB
+** Cache
+** SMP
+* Inicjalizacja VAS jądra
+** Procesor na początku używa adresów fizycznych
+** Problem: jak nagle zacząć używać adresów wirtualnych?
+*** Na x86 trochę skomplikowane (czy w ogóle o tym mówić?), na MIPSie prostsze
+* Zarządzanie wirtualnymi przestrzeniami adresowymi
+** Tworzenie
+** Przełączanie
+** Niszczenie
+** Pamięć dzielona
+** Polityki: przydziału, zastępowania, sprowadzania
+* Jak to jest w Mimikerze
+** Stan obecny
+** Co zostało zrobione i jak
