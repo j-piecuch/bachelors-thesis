@@ -1,0 +1,57 @@
+
+
+* Introduction
+** A brief history of memory management (or memory abstractions?)
+*** No memory abstraction
+    - No protection
+    - Relocation of program addresses is costly
+    - Hard to keep multiple programs in memory at the same time
+*** Basic address spaces: base & limit registers
+    - Some protection (processes are isolated)
+    - Relocation is straightforward, since all addresses are relative to the base register
+    - Possible to keep multiple programs in memory
+    - The whole program image still needs to be in physical memory
+    - How to handle dynamically growing programs?
+*** Virtual memory
+    - Each process provided with its own virtual address space
+    - Program generates virtual addresses, these get translated to physical addresses by the MMU
+    - Allows programs which are only partially in RAM to run
+    - Multiple approaches: segmentation, paging, or both.
+**** Segmentation
+**** Paging
+     - Virtual address space divided into pages
+     - Physical address space divided into frames, each holding the contents of 0 or 1 page
+     - Access rights managed on a per-page basis
+     - Page Table used to perform translation
+**** Segmentation + paging
+* Data structures for representing a virtual address space
+** Requirements
+   - Fast handling of page faults
+** Separation of machine-dependent and machine-independent components
+** Examples: FreeBSD, Linux
+* Page table structure
+** Requirements
+   - Minimal memory footprint
+   - Fast & simple lookup procedure (simple if lookup done by hardware)
+** Hierarchical page table
+** Inverted page table
+** Virtualized flat page table
+* Hardware support for virtual memory
+** AMD64
+** MIPS32
+* Pitfalls
+** TLB
+** Cache
+** SMP systems
+* Initialization of kernel virtual address space
+** Overview of the process on x86
+* Managing multiple virtual address spaces
+** Creation
+** Switching
+** Destruction
+** Allocation/deallocation of space
+** Shared memory
+** Allocation, replacement & fetching policy
+* Mimiker
+** What it looks like
+** My contributions
