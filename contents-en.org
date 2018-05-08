@@ -27,6 +27,8 @@
 * Data structures for representing a virtual address space
 ** Requirements
    - Fast handling of page faults
+   - Support for shared memory
+   - Bookkeeping associated with holding parts of the AS in backing store
 ** Separation of machine-dependent and machine-independent components
 ** Examples: FreeBSD, Linux
 * Page table structure
@@ -45,13 +47,15 @@
 ** SMP systems
 * Initialization of kernel virtual address space
 ** Overview of the process on x86
-* Managing multiple virtual address spaces
+* Managing multiple virtual address spaces in FreeBSD
 ** Creation
 ** Switching
 ** Destruction
+** Support for different types of backing store
 ** Allocation/deallocation of space
 ** Shared memory
 ** Allocation, replacement & fetching policy
+** Cleaning dirty pages and swapping
 * Mimiker
 ** What it looks like
 ** My contributions
