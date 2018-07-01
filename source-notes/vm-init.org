@@ -1,0 +1,161 @@
+VIRTUAL MEMORY SYSTEM INITIALIZATION (x86)
+
+* KVA layout
+The unit of the system allocation is single PDE, which
+represents NBPDR bytes, aligned to NBPDR.  NBPDR is 4M for non-PAE
+page tables, and 2M for PAE.  Addresses below are shown for non-PAE.
+
+0x00000000 - 0x003fffff  Transient identity map of low memory (0-4M),
+                         normally disabled to catch NULL derefs.
+0x00400000 - 0x007fffff  Fixed mapping of the low memory (0-4M).
+0x00800000 - 0xffbfffff  KERNBASE (VA) == KERNLOAD (PA), kernel
+                         text + data and all kernel maps.  Managed
+                         by MI VM.
+0xffc00000 - 0xffdfffff  Recursive kernel page table mapping, pointed
+                         to by PTmap.  PTD[] recusively points
+                         into PTmap.
+0xffe00000 - 0xffffffff  Kernel/User mode shared PDE, contains GDT,
+                         IDT, TSS, LDT, trampoline code and stacks.
+                         Managed by pmap_trm_alloc().
+* Important "#define"s, functions and global data structures
+** Compile-time numeric parameters
+KVA_PAGES:
+  Number of page table pages needed to map whole kernel address space.
+  A single entry is 4 bytes and maps a 4K region (if PAE is disabled).
+  A single page table page maps 4M of address space.
+  Since the size of KVAS = 1G, we need 256 page table pages.
+  XXX: why is it multiplied by 4?
+  Value: 256*4
+
+NKPT (number of kernel page tables):
+  Number of page table pages that are constructed by locore.S.
+  Must be sufficient to map vm_page_array.
+  Value: 30
+
+NKPDE (number of kernel page directory entries):
+  Number of kernel page tables/pde's
+  Value: 256*4
+
+KPTDI (kernel page table directory index):
+  PTD index of start of kernel virtual address space
+  Value: 0
+
+LOWPTDI (low memory page table directory index):
+  Low memory map pde
+  Value: 1
+
+KERNPTDI:
+  PTD index of start of kernel text
+  Value: 2
+
+PTDPTDI:
+  PTD index of entry that points to PTD
+  Value: NPDEPTD - 1 - NPGPTD
+
+TRPTDI:
+  Trampoline pde
+  Value: NPDEPTD - 1
+
+PTESHIFT:
+  Log2 of PTE size
+  Value: 2
+
+PDESHIFT:
+  Log2 of PDE size
+  Value: 2
+
+KERNBASE:
+  Kernel base address that the kernel has been compiled to use
+  Value: KERNLOAD
+
+KERNLOAD:
+  Physical load address of the kernel
+  Value: KERNPTDI << PDRSHIFT (8M)
+
+** Global variables
+
+pt_entry PTmap[]:
+  Address of current address space page table
+  Value: PTDPTDI << PDRSHIFT (second-to-last 4MB of the address space)
+
+pt_entry KPTmap[]:
+  KPTmap is a linear mapping of the kernel page table.  It differs from the
+  recursive mapping in two ways: (1) it only provides access to kernel page
+  table pages, and not user page table pages, and (2) it provides access to
+  a kernel page table page after the corresponding virtual addresses have
+  been promoted to a 2/4MB page mapping.
+  KPTmap is first initialized by locore to support just NPKT page table
+  pages.  Later, it is reinitialized by pmap_bootstrap() to allow for
+  expansion of the kernel page table.
+  Value: first set in pmap_cold() to right after the end of kernel image
+
+pd_entry_t PTD[]:
+  Address of current address space page directory
+  Value: PTmap + (PTDPTDI * PAGESIZE)
+
+pd_entry_t PTDpde[]:
+  PDE mapping the PTD itself
+  Value: PTD + (PTDPTDI * PDESIZE)
+
+pd_entry_t *IdlePTD:
+  Physical address of "Idle" state directory
+  Value: first set in pmap_cold()
+
+vm_paddr_t phys_avail[]:
+  TODO
+
+vm_paddr_t dump_avail[]:
+  TODO
+
+vm_offset_t virtual_avail:
+  Address of first available virtual page
+
+vm_offset_t virtual_end:
+  Address of last available virtual page
+
+u_long phys_free:
+  Physical address of next free page.
+  Boot-time allocation routines (e.g. allocpages) simply increment this address.
+  Value: &_end, rounded up to NBPDR set in pmap_cold()
+
+long Maxmem:
+  Address of the page immediately after the highest page in the physical address space
+** Functions/macros
+
+vtopte(vaddr):
+  Translate a virtual address to the kernel virtual address of its page table
+  entry (PTE).  This can be used recursively.  If the address of a PTE as
+  previously returned by this macro is itself given as the argument, then the
+  address of the page directory entry (PDE) that maps the PTE will be
+  returned.
+
+vtophys(vaddr):
+  Translate a virtual address to its corresponding physical address.
+
+vm_paddr_t pmap_kextract(vm_offset_t va):
+  Extract from the kernel page table the physical address mapped by the
+  given virtual address `va`.
+
+void pmap_cold(void):
+  Called from locore.s before paging is enabled.
+  - Allocates and sets up the first kernel page table, IdlePTD, proc0kstack
+  - Enables paging with IdlePTD as the Page Directory
+
+u_long allocpages(u_int cnt, u_long *physfree):
+  Allocates memory at boot-time in multiples of PAGE_SIZE.
+  Works by simply incrementing the address pointed to by physfree.
+
+void getmemsize(int first):
+  - Called from i386_init
+  - Determines the physical memory available in the system
+  - Populates the physmap array with all physical memory ranges
+  - Calls pmap_bootstrap()
+
+void pmap_bootstrap(vm_paddr_t firstaddr):
+  Bootstrap the system enough to run with virtual memory.
+  On the i386 this is called after mapping has already been enabled
+  in locore.s with the page table created in pmap_cold(),
+  and just syncs the pmap module with what has already been done.
+  - sets virtual_avail and virtual_end
+* Machine-dependent initialization (locore.S)
+1. pmap_cold gets called
