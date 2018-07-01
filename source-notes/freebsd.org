@@ -11,8 +11,16 @@ phys_avail: array of pairs of pm_addr_t
 virt_avail
 vm_page_array
 
+kernel_map: struct vm_map describing the kernel virtual address space
+- can be further divided into submaps (see [[http://fxr.watson.org/fxr/source/vm/vm_init.c?v%3DFREEBSD11%3Bim%3D3#L165][vm_submap_init]])
 
 physmem, realmem: total amount of system physical memory in pages
+
+* Various allocation procedures
+** Kernel virtual addresses (non-backed pages)
+** Backed kernel pages
+** Bare-bones physical pages
+- vm_phys_alloc_pages
 
 * Important code paths
 ** Non-backed page allocation from kernel virtual address space
@@ -42,7 +50,7 @@ Path:
 
 * Platform-specific system initialization (MIPS)
 ** Entry point
-[[http://fxr.watson.org/fxr/source/mips/mips/locore.S?v%3DFREEBSD11#L86][_start (mips/mips/locore.S)]]
+   [[http://fxr.watson.org/fxr/source/mips/mips/locore.S?v%3DFREEBSD11#L86][_start (mips/mips/locore.S)]]
 ** Platform-specific startup
 [[http://fxr.watson.org/fxr/source/mips/malta/malta_machdep.c?v%3DFREEBSD11#L281][platform_start (mips/malta/malta_machdep.c)]]
 - [[http://fxr.watson.org/fxr/source/mips/malta/malta_machdep.c?im%3D7#L176][mips_init (mips/malta/malta_machdep.c)]]
@@ -65,8 +73,6 @@ Path:
 - [[http://fxr.watson.org/fxr/source/mips/mips/pmap.c?im%3D10#L431][pmap_create_kernel_pagetable (mips/mips/pmap.c)]]
   - steals physical memory for segment table and all kernel page tables
   - initializes segment table entries and sets all PTEs to global and invalid
-
-* S
 
 * Platform-independent virtual memory initialization (SI_SUB_VM)
 [[http://fxr.watson.org/fxr/source/vm/vm_init.c#L132][vm_mem_init (vm/vm_init.c)]]
