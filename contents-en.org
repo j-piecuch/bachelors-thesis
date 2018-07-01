@@ -1,43 +1,61 @@
-
+Ideas for additional chapters:
+- Different types of page table structures
 
 * Introduction
-** A brief history of memory management (or memory abstractions?)
-*** No memory abstraction
-    - No protection
-    - Relocation of program addresses is costly
-    - Hard to keep multiple programs in memory at the same time
-*** Basic address spaces: base & limit registers
-    - Some protection (processes are isolated)
-    - Relocation is straightforward, since all addresses are relative to the base register
-    - Possible to keep multiple programs in memory
-    - The whole program image still needs to be in physical memory
-    - How to handle dynamically growing programs?
-*** Virtual memory
-    - Each process provided with its own virtual address space
-    - Program generates virtual addresses, these get translated to physical addresses by the MMU
-    - Allows programs which are only partially in RAM to run
-    - Multiple approaches: segmentation, paging, or both.
-**** Segmentation
-**** Paging
-     - Virtual address space divided into pages
-     - Physical address space divided into frames, each holding the contents of 0 or 1 page
-     - Access rights managed on a per-page basis
-     - Page Table used to perform translation
-**** Segmentation + paging
+** What is virtual memory?
+It's a means of providing processes with a uniform, abstract (virtual) version
+of memory: a contiguous large chunk of addresses, much larger than the amount of
+physical memory in the system.
+*** Basic definitions: MMU, Virtual Address Space, Pages, Frames.
+** FreeBSD source tree overview
 * Data structures for representing a virtual address space
+** The user's perspective
+- Flat address space, much larger than the amount of physical memory
+- Some regions are accessible, some are not
+  - Can use this to represent the address space in a compressed way
+- Regions can allow different types of accesses
+- The user can map the contents of a file, get additional anonymous memory,
+  change the protection of regions, wire pages down
+- Processes can share memory
+** The system's perspecive
+- Multiple processes are competing for physical memory
+  - Impossible to keep every process' mapped pages resident
+  - Most heavily used pages resident, the rest in backing store
+  - Need to do the bookkeeping
+  - Now a process may try to access a page that's not resident, what should happen?
+    - PAGE FAULT!
+    - Happen frequently, need to service them as fast as possible
 ** Requirements
-   - Fast handling of page faults
-   - Support for shared memory
-   - Bookkeeping associated with holding parts of the AS in backing store
-** Separation of machine-dependent and machine-independent components
-** Examples: FreeBSD, Linux
-* Page table structure
-** Requirements
-   - Minimal memory footprint
-   - Fast & simple lookup procedure (simple if lookup done by hardware)
-** Hierarchical page table
-** Inverted page table
-** Virtualized flat page table
+- Support for different types of objects: files, anonymous memory, devices...
+- Fast handling of page faults
+- Support for shared memory
+- Bookkeeping associated with holding parts of the AS in backing store
+- Portable
+** FreeBSD: struct vmspace
+*** Machine-independent parts
+**** vm_map
+- Represent the abstract layout of a process' address space
+  - Ordered list of memory segments represented by vm_map_entry
+    - Segments share protection and 'type' (anonymous/file/device)
+    - Also organized into a binary tree for fast lookup
+**** vm_map_entry
+- Represent contiguous ranges of pages with the same protection and 'type'
+  (anonymous/file/device)
+- They are not concerned with the contents of the memory
+- Point at a vm_object that holds the contents
+**** vm_object
+- Acts as a cache for a memory object (file/anonymous memory)
+- Keeps track of resident pages belonging e.g. a file
+- Multiple vm_map_entry from different address spaces can reference
+  the same vm_object, enabling inter-process sharing
+- Is not concerned with how pages are brought into memory -- that's the pager's job
+**** vm_page
+- Describes a single page of physical memory
+- Holds a list of all mappings to this page
+*** Machine-dependent parts
+**** pmap
+- Stores the mapping of virtual -> physical addresses in a way that's
+**** pv_entry
 * Hardware support for virtual memory
 ** AMD64
 ** MIPS32
@@ -46,13 +64,15 @@
 ** Cache
 ** SMP systems
 * Initialization of kernel virtual address space
-** Overview of the process on x86
+- Highly machine-dependent, but some parts are portable
+** Step-by-step overview of the process on x86 with code snippets
 * Managing multiple virtual address spaces in FreeBSD
 ** Creation
 ** Switching
 ** Destruction
 ** Support for different types of backing store
 ** Allocation/deallocation of space
+** Mapping files
 ** Shared memory
 ** Allocation, replacement & fetching policy
 ** Cleaning dirty pages and swapping
