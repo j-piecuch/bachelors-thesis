@@ -1,1 +1,8 @@
 *~
+*.out
+*.log
+*.prv
+*.toc
+*.aux
+*_
+auto/*
