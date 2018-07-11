@@ -55,6 +55,7 @@
 %%%%% WLASNE DODATKOWE PAKIETY
 %
 %\usepackage{graphicx,listings,amsmath,amssymb,amsthm,amsfonts,tikz}
+\usepackage{amsfonts}
 %
 %%%%% WŁASNE DEFINICJE I POLECENIA
 %
@@ -66,11 +67,27 @@
 % ...
 %%%%%
 
+\input macros
 \begin{document}
 
 %%%%% POCZĄTEK ZASADNICZEGO TEKSTU PRACY
 
+
+\chapter*{Przykłady komentarzy do tekstu}
+
+\pwit{Komentarz w treści} \pwitside{Komentarz na boku}
+\cahir{Komentarz w treści} \cahirside{Komentarz na boku}
+\response{Odpowiedź na komentarz w treści} \responseside{Odpowiedź na
+  komentarz na boku}
+
+\pwit{Dodałem makra umożliwiające komentowanie i odpowiedź na
+  komentarze. Wymagało to dodania wiersza do do iithesis.cls, ale nie
+  powinno mieć to wpływu na układ tekstu. Po napisaniu i
+  zaakceptowaniu pracy można te zmiany usunąć.}
+
+
 \chapter{Introduction}
+
 
 \section{What is virtual memory?}
 

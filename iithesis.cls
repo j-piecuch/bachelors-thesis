@@ -55,6 +55,9 @@
 \setboolean{Decl@ration}{false}
 \newboolean{Many@Advisors}
 \setboolean{Many@Advisors}{false}
+
+\RequirePackage[textwidth=2.5cm]{todonotes}
+
 \newcommand \@thesislevel {}
 \newcommand \@studydegree {I}
 
