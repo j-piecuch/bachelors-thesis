@@ -5,6 +5,7 @@
 
 \usepackage[utf8]{inputenc}
 \usepackage{enumitem}
+\usepackage{minted}
 
 %%%%% DANE DO STRONY TYTUŁOWEJ
 % Niezaleznie od jezyka pracy wybranego w opcjach klasy, tytul i streszczenie
@@ -211,6 +212,107 @@ after a particular architecture, e.g. the \texttt{i386} directory for the x86
 architecture. This is quite confusing, since the kernel source tree contains a
 directory named \texttt{x86} -- this directory contains architecture-specific
 code that is shared between the AMD64 and x86 architectures.
+
+\chapter{An overview of the FreeBSD VM subsystem}
+
+The goal of this chapter is to describe the data structures used for managing
+virtual memory in the FreeBSD Operating System. For each one, a brief high-level
+introduction is given, followed by a source code listing that shows the C
+language structure definition. Important member fields are then individually
+described below the listing.
+
+\section{\texttt{vmspace}}
+
+The \texttt{vmspace} structure is the highest-level structure describing the
+virtual address space of a process. It contains both the machine-independent
+(\texttt{vm\_map}) and machine-dependent (\texttt{pmap}) structures used for
+describing a mapping. The other fields hold various statistics and parameters
+and are not relevant to the discussion.
+
+\begin{listing}[H]
+\begin{minted}{c}
+struct vmspace {
+    struct vm_map vm_map;           /* VM address map */
+    /* Certain fields omitted */
+    caddr_t vm_maxsaddr;            /* User VA at max stack growth */
+    volatile int vm_refcnt;         /* Number of references */
+    struct pmap vm_pmap;            /* Physical map */
+};
+\end{minted}
+\caption{\texttt{vm/vm\_map.h}: Definition of \texttt{struct vmspace}}
+\end{listing}
+
+\section{\texttt{vm\_map}}
+
+The \texttt{vm\_map} structure represents the machine-independent part of a
+virtual address space. It is structured as a tree of \texttt{vm\_map\_entry}
+structures, each of which describes a continous fragment of the address space.
+
+
+\begin{listing}[H]
+\begin{minted}{c}
+struct vm_map {
+    struct vm_map_entry header; /* List of entries */
+#define min_offset  header.end
+#define max_offset  header.start
+    struct sx lock;             /* Lock for map data */
+    struct mtx system_mtx;
+    int nentries;               /* Number of entries */
+    vm_size_t size;             /* Virtual size */
+    u_int timestamp;            /* Version number */
+    u_char needs_wakeup;
+    u_char system_map;          /* Am I a kernel map? */
+    vm_flags_t flags;           /* Flags for this vm_map */
+    vm_map_entry_t root;        /* Root of a binary search tree */
+    pmap_t pmap;                /* Pointer to physical map */
+    int busy;
+};
+\end{minted}
+\caption{\texttt{vm/vm\_map.h}: Definition of \texttt{struct vm\_map}}
+\end{listing}
+
+\subsection*{\mintinline{c}{struct vm_map_entry header;}}
+This \texttt{vm\_map\_entry} is used for holding the minimum and maximum virtual
+address for use by the user. It also serves as the header of a linked list of
+all \texttt{vm\_map\_entry} structures in the \texttt{vm\_map}, sorted by start
+address. It is used for quickly retrieving the immediate left and right
+neighbours of a \texttt{vm\_map\_entry}, as well as iterating over all entries
+in a \texttt{vm\_map}.
+
+\subsection*{\mintinline{c}{struct sx lock;}\\
+  \mintinline{c}{struct mtx system_mtx;}}
+These are synchronization tools used to manage concurrent access to the map. If
+the value of \texttt{system\_map} is \texttt{TRUE}, \texttt{system\_mtx} is used
+exclusively, otherwise only \texttt{lock} is used.
+
+\subsection*{\mintinline{c}{u_int timestamp;}}
+The value of this field is incremented each time exclusive access is acquired to
+read or modify the map. This is so that algorithms that require relinquishing
+and reacquiring the lock after some time can detect if someone has possibly
+tampered with the data structure in the meantime.
+
+\subsection*{\mintinline{c}{u_char needs_wakeup;}}
+This is a flag indicating that there is a thread (or threads) waiting for a
+large enough chunk of free address space to satisfy its allocation request.
+Whenever space is freed from the map and the flag is set, waiting threads are
+woken up to retry the allocation.
+
+\subsection*{\mintinline{c}{vm_map_entry_t root;}}
+This is a pointer to the root of the binary tree used to look up entries in the
+map. The tree uses the self-balancing splay algorithm by Tarjan and Sleator. The
+most recently looked up entry is at the root of the tree, which speeds up page
+fault handling by taking advantage of the spatial locality of page faults (i.e.
+when a page fault happens, the next one is likely to happen at an address close
+to the previous one).
+
+\subsection*{\mintinline{c}{int busy;}}
+The \texttt{busy} field is an integer counter that is incremented whenever a
+thread is in the middle of performing an operation on the \texttt{vm\_map} and
+has to release the lock for some reason, e.g. to wait for some event to occur.
+This signalizes to other threads that some other thread is relying on the map
+being in the same state as it was before it relased the lock. Thus, effectively,
+when the value of the counter is greater than 0, modifications to the
+\texttt{vm\_map} are forbidden.
 
 %%%%% BIBLIOGRAFIA
 
