@@ -4,6 +4,7 @@
 \documentclass[shortabstract, english]{iithesis}
 
 \usepackage[utf8]{inputenc}
+\usepackage{enumitem}
 
 %%%%% DANE DO STRONY TYTUŁOWEJ
 % Niezaleznie od jezyka pracy wybranego w opcjach klasy, tytul i streszczenie
@@ -164,6 +165,52 @@ In summary, virtual memory has the following important characteristics:
   demand, and unmapped when the OS determines the process is unlikely to
   reference them in the near future
 \end{itemize}
+
+\section{The FreeBSD Operating System}
+
+FreeBSD is an open-source operating system, first released in 1993. It is the
+most popular OS in the BSD family of Operating Systems, which includes FreeBSD,
+NetBSD, OpenBSD and DragonFlyBSD. Unlike Linux, FreeBSD is a whole Operating
+System, providing the kernel, drivers and a suite of utility programs.
+
+It is released under a permissive BSD license, which makes it an attractive
+choice for commercial applications. FreeBSD has been used as the basis for
+Operating Systems such as Apple's MacOS, as well as the OS running on Sony's
+PlayStation 3 and PlayStation 4 consoles.
+
+\subsection{Browsing the source code}
+
+This thesis includes many source code listings from the FreeBSD repository.
+Because of its scope, the level of implementation detail covered is limited.
+Should the reader want to explore the source tree themselves (which is strongly
+encouraged), there are several websites providing the code of the whole FreeBSD
+kernel with support for identifier search:
+\begin{enumerate}[label=\textnormal{(\arabic*)}]
+\item \url{http://fxr.watson.org/}\label{fxr}
+\item \url{http://bxr.su/}\label{bxr}
+\end{enumerate}
+
+The author recommends \ref{fxr}, as it allows the user to select any major
+version of the source tree, while \ref{bxr} only presents the latest revision.
+This is especially relevant since all source code discussion and listings apply
+specifically to the \texttt{11-STABLE} version of the kernel. On the other hand,
+\ref{bxr} has a more aesthetically pleasing interface, which includes syntax
+highlighting.
+
+The kernel source code can be found in the \texttt{/sys} directory of the tree.
+Since other parts of the tree are not going to be discussed, all subsequent
+paths are relative to this directory.
+
+The \texttt{kern} directory holds most of the kernel's portable code, like the
+scheduler, subsystem initialization and shutdown, and the Virtual File System.
+
+The \texttt{vm} directory contains the machine-independent part of the Virtual
+Memory subsystem. This is where most of the code listings will come from.
+Machine-dependent parts of the subsystem can be found in the directories named
+after a particular architecture, e.g. the \texttt{i386} directory for the x86
+architecture. This is quite confusing, since the kernel source tree contains a
+directory named \texttt{x86} -- this directory contains architecture-specific
+code that is shared between the AMD64 and x86 architectures.
 
 %%%%% BIBLIOGRAFIA
 
