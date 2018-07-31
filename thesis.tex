@@ -7,6 +7,8 @@
 \usepackage{enumitem}
 \usepackage{minted}
 
+\setmintedinline[c]{breaklines=true}
+
 %%%%% DANE DO STRONY TYTUŁOWEJ
 % Niezaleznie od jezyka pracy wybranego w opcjach klasy, tytul i streszczenie
 % pracy nalezy podac zarowno w jezyku polskim, jak i angielskim.
@@ -221,11 +223,11 @@ introduction is given, followed by a source code listing that shows the C
 language structure definition. Important member fields are then individually
 described below the listing.
 
-\section{\texttt{vmspace}}
+\section{\mintinline{c}{vmspace}}
 
-The \texttt{vmspace} structure is the highest-level structure describing the
+The \mintinline{c}{vmspace} structure is the highest-level structure describing the
 virtual address space of a process. It contains both the machine-independent
-(\texttt{vm\_map}) and machine-dependent (\texttt{pmap}) structures used for
+(\mintinline{c}{vm_map}) and machine-dependent (\mintinline{c}{pmap}) structures used for
 describing a mapping. The other fields hold various statistics and parameters
 and are not relevant to the discussion.
 
@@ -239,13 +241,13 @@ struct vmspace {
     struct pmap vm_pmap;            /* Physical map */
 };
 \end{minted}
-\caption{\texttt{vm/vm\_map.h}: Definition of \texttt{struct vmspace}}
+\caption{\texttt{vm/vm\_map.h}: Definition of \mintinline{c}{struct vmspace}}
 \end{listing}
 
-\section{\texttt{vm\_map}}
+\section{\mintinline{c}{vm_map}}
 
-The \texttt{vm\_map} structure represents the machine-independent part of a
-virtual address space. It is structured as a tree of \texttt{vm\_map\_entry}
+The \mintinline{c}{vm_map} structure represents the machine-independent part of a
+virtual address space. It is structured as a tree of \mintinline{c}{vm_map_entry}
 structures, each of which describes a continous fragment of the address space.
 
 
@@ -268,22 +270,22 @@ struct vm_map {
     int busy;
 };
 \end{minted}
-\caption{\texttt{vm/vm\_map.h}: Definition of \texttt{struct vm\_map}}
+\caption{\texttt{vm/vm\_map.h}: Definition of \mintinline{c}{struct vm_map}}
 \end{listing}
 
 \subsection*{\mintinline{c}{struct vm_map_entry header;}}
-This \texttt{vm\_map\_entry} is used for holding the minimum and maximum virtual
+This \mintinline{c}{vm_map_entry} is used for holding the minimum and maximum virtual
 address for use by the user. It also serves as the header of a linked list of
-all \texttt{vm\_map\_entry} structures in the \texttt{vm\_map}, sorted by start
+all \mintinline{c}{vm_map_entry} structures in the \mintinline{c}{vm_map}, sorted by start
 address. It is used for quickly retrieving the immediate left and right
-neighbours of a \texttt{vm\_map\_entry}, as well as iterating over all entries
-in a \texttt{vm\_map}.
+neighbours of a \mintinline{c}{vm_map_entry}, as well as iterating over all entries
+in a \mintinline{c}{vm_map}.
 
 \subsection*{\mintinline{c}{struct sx lock;}\\
   \mintinline{c}{struct mtx system_mtx;}}
 These are synchronization tools used to manage concurrent access to the map. If
-the value of \texttt{system\_map} is \texttt{TRUE}, \texttt{system\_mtx} is used
-exclusively, otherwise only \texttt{lock} is used.
+the value of \mintinline{c}{system_map} is \mintinline{c}{TRUE}, \mintinline{c}{system_mtx} is used
+exclusively, otherwise only \mintinline{c}{lock} is used.
 
 \subsection*{\mintinline{c}{u_int timestamp;}}
 The value of this field is incremented each time exclusive access is acquired to
@@ -306,16 +308,313 @@ when a page fault happens, the next one is likely to happen at an address close
 to the previous one).
 
 \subsection*{\mintinline{c}{int busy;}}
-The \texttt{busy} field is an integer counter that is incremented whenever a
-thread is in the middle of performing an operation on the \texttt{vm\_map} and
+The \mintinline{c}{busy} field is an integer counter that is incremented whenever a
+thread is in the middle of performing an operation on the \mintinline{c}{vm_map} and
 has to release the lock for some reason, e.g. to wait for some event to occur.
 This signalizes to other threads that some other thread is relying on the map
 being in the same state as it was before it relased the lock. Thus, effectively,
 when the value of the counter is greater than 0, modifications to the
-\texttt{vm\_map} are forbidden.
+\mintinline{c}{vm_map} are forbidden.
 
+\section{\mintinline{c}{vm_map_entry}}
+
+The \mintinline{c}{vm_map_entry} structure describes a contiguous, page-aligned
+segment of an address space. All virtual addresses within this segment have
+the same protection attributes. The \mintinline{c}{vm_map_entry} is not responsible
+for providing the contents of the segment, that's the job of the
+\mintinline{c}{vm_object} that is \textbf{backing} the entry.
+
+\begin{listing}[H]
+\begin{minted}{c}
+struct vm_map_entry {
+   struct vm_map_entry *prev;  /* Previous entry */
+   struct vm_map_entry *next;  /* Next entry */
+   struct vm_map_entry *left;  /* Left child in binary search tree */
+   struct vm_map_entry *right; /* Right child in binary search tree */
+   vm_offset_t start;          /* Start address */
+   vm_offset_t end;            /* End address */
+   vm_offset_t next_read;      /* Vaddr of the next sequential read */
+   vm_size_t adj_free;         /* Amount of adjacent free space */
+   vm_size_t max_free;         /* Max free space in subtree */
+   union vm_map_object object; /* Object I point to */
+   vm_ooffset_t offset;        /* Offset into object */
+   vm_eflags_t eflags;         /* Map entry flags */
+   vm_prot_t protection;       /* Protection code */
+   vm_prot_t max_protection;   /* Maximum protection */
+   vm_inherit_t inheritance;   /* Inheritance */
+   uint8_t read_ahead;         /* Pages in the read-ahead window */
+   int wired_count;            /* can be paged if = 0 */
+   struct ucred *cred;         /* tmp storage for creator ref */
+   struct thread *wiring_thread;
+};
+\end{minted}
+\caption{\texttt{vm/vm\_map.h}: Definition of \mintinline{c}{struct vm_map}}
+\end{listing}
+
+\subsection*{\mintinline{c}{struct vm_map_entry prev;}\\
+  \mintinline{c}{struct vm_map_entry next;}}
+These pointers link the entry into the doubly linked list of all entries within
+a map, sorted by start address.
+
+\subsection*{\mintinline{c}{vm_offset_t next_read;}}
+This field is used by the kernel to detect when a process accesses pages in the
+segment sequentially. When the kernel knows the accesses are sequential, it will
+bring into physical memory pages beyond the faulting one, since it is reasonable
+to assume that the pattern of accesses will continue, and therefore reduce the
+number of page faults generated by the process.
+
+\subsection*{\mintinline{c}{vm_size_t adj_free;}\\
+  \mintinline{c}{vm_size_t max_free;}}
+\mintinline{c}{adj_free} is the amount of free space (in bytes) between this
+entry and the adjacent entry to the right. It is used when searching the
+\mintinline{c}{vm_map} for a free segment of a certain size.
+\mintinline{c}{max_free} is simply the maximum of the values of
+\mintinline{c}{adj_free} of all entries inside the subtree rooted at this entry.
+
+\subsection*{\mintinline{c}{union vm_map_object object;}}
+This field is either a pointer to a \mintinline{c}{struct vm_object}, or a
+pointer to another \mintinline{c}{struct vm_map} called a submap. Almost every
+time it is the former, as submaps are only used inside the kernel map to
+allocate space in advance for certain data structures.
+
+\subsection*{\mintinline{c}{vm_ooffset_t offset;}}
+The offset determines which part of the \mintinline{c}{vm_object} is accessible
+through the \mintinline{c}{vm_map_entry}. Let \mintinline{c}{ent} be a
+\mintinline{c}{vm_map_entry} backed by some object. Virtual addresses from
+\mintinline{c}{ent.start} to \mintinline{c}{ent.end - 1} (inclusive) map to
+offsets \mintinline{c}{ent.offset} to
+\mintinline{c}{ent.offset + (ent.end - end.start) - 1}
+within the object.
+
+\subsection*{\mintinline{c}{vm_eflags_t eflags;}}
+\mintinline{c}{eflags} contains various flags, some notable of which are:
+\begin{itemize}
+\item \mintinline{c}{MAP_ENTRY_COW}: indicates that the entry is a
+  \textbf{copy-on-write} entry, which means that initially all pages are marked
+  read-only. As soon as the process attempts to write to a page in the enty, the
+  kernel will copy the faulting page to a new page and map the new page into the
+  address space of the process, this time with the write bit set. This avoids
+  unnecessary copying of pages when a process forks or requests a private
+  mapping of a file (i.e. a mapping such that changes to it aren't reflected in
+  the file).
+\item \mintinline{c}{MAP_BEHAV_{NORMAL, SEQUENTIAL, RANDOM}}: these flags
+  specify the access pattern that is to be expected from the process. The
+  default is \mintinline{c}{MAP_BEHAV_NORMAL}, which makes the kernel detect
+  sequential access patterns and act accordingly.
+\end{itemize}
+
+\subsection*{\mintinline{c}{vm_prot_t protection;} \\
+  \mintinline{c}{vm_prot_t max_protection;}}
+These two fields specify the current protection attributes of the entry and the
+maximum allowable access rights, respectively. Both are bitmasks composed of 3
+fields: \mintinline{c}{VM_PROT_READ}, \mintinline{c}{VM_PROT_WRITE}, and
+\mintinline{c}{VM_PROT_EXECUTE}.
+
+\subsection*{\mintinline{c}{vm_inheritance_t inherit;}}
+The \mintinline{c}{inherit} field determines what happens to the entry when the
+process forks. The possible behaviours are:
+\begin{itemize}
+\item \mintinline{c}{VM_INHERIT_SHARE}: The child gets an entry that shares the
+  underlying object with the parent. Changes made by one process are visible to
+  the other.
+\item \mintinline{c}{VM_INHERIT_COPY}: The child gets a copy-on-write entry with
+  contents identical to the parent entry's contents. Changes made by one process
+  are not visible to the other.
+\item \mintinline{c}{VM_INHERIT_ZERO}: The child gets an anonymous zero-filled
+  entry with the same size and protection as the parent entry.
+\item \mintinline{c}{VM_INHERIT_NONE}: The entry won't appear in the child.
+\end{itemize}
+
+\section{\mintinline{c}{vm_object}}
+
+A \mintinline{c}{vm_object} contains a \mintinline{c}{vm_map_entry}'s resident
+pages. Multiple entries belonging to different processes can have the same
+backing object, allowing for fast interprocess communication through shared memory.
+
+Copy-on-write is implemented in BSD using special \textbf{shadow objects}. These
+objects have backing objects themselves, and hence can form chains ending in a
+non-shadow object. Shadow objects hold pages copied as a result of a
+copy-on-write fault.
+
+Since \mintinline{c}{vm_object}s are only containers for resident pages, and not
+all pages are always resident, there must be some other component responsible
+for providing the contents of the pages. This is the job of a \textbf{pager}
+structure contained within the object. It provides the abstraction of a backing
+store from which pages can be filled with contents, and to which pages can be
+written back in case of memory shortage.
+
+\begin{listing}[H]
+\begin{minted}{c}
+struct vm_object {
+    struct rwlock lock;
+    /* List entry used to link into the list of all vm_objects */
+    TAILQ_ENTRY(vm_object) object_list;
+    /* List of objects shadowing this object */
+    LIST_HEAD(, vm_object) shadow_head;
+    /* List entry used to link into shadow_head of shadowed object */
+    LIST_ENTRY(vm_object) shadow_list;
+    struct pglist memq;     /* List of resident pages */
+    struct vm_radix rtree;  /* Root of resident page radix trie */
+    vm_pindex_t size;       /* Object size */
+    /* Certain fields omitted */
+    /* How many vm_map_entries/vm_objects reference this object*/
+    int ref_count;
+    int shadow_count;       /* Length of linked list at shadow_head */
+    vm_memattr_t memattr;   /* Default memory attribute for pages */
+    objtype_t type;         /* Type of pager */
+    /* Certain fields omitted */
+    int resident_page_count;    /* Number of resident pages */
+    struct vm_object *backing_object;   /* Object that I'm a shadow of */
+    vm_ooffset_t backing_object_offset; /* Offset in backing object */
+    /* List of all objects of this pager type */
+    TAILQ_ENTRY(vm_object) pager_object_list;
+    LIST_HEAD(, vm_reserv) rvq; /* List of reservations */
+    void *handle;   /* Opaque pointer used by the pager */
+    union {
+        /* Various pager structures omitted */
+    } un_pager;
+    /* Certain fields omitted */
+};
+\end{minted}
+\caption{\texttt{vm/vm\_object.h}: Definition of \mintinline{c}{struct vm_object}}
+\end{listing}
+
+\subsection*{\mintinline{c}{vm_memattr_t memattr;}}
+
+\mintinline{c}{memattr} specifies the default cache behaviour of pages belonging
+to the object. For example, contents of pages with the
+\mintinline{c}{VM_MEMATTR_UNCACHEABLE} attribute cannot be cached and all read
+and write requests have to go directly to the physical memory. This attribute is used
+primarily for pages representing memory mapped devices, e.g. frame buffers.
+
+\subsection*{\mintinline{c}{objtype_t type;}}
+
+There are several types of pagers that can provide the contents of memory pages
+to a \mintinline{c}{vm_object}. The \mintinline{c}{type} field determines the
+type of pager used by the object. The most widely used types of pagers are:
+
+\begin{itemize}
+
+\item \mintinline{c}{OBJT_SWAP}: The swap pager is used to provide contents of
+  anonymous memory segments (i.e. segments that are not backed by a file and are
+  initially filled with zeros). When asked to fill a page with contents, it
+  first checks if the page had been swapped out before. If so, the contents are
+  fetched from secondary storage -- either a swap file or a dedicated swap
+  partition. If not, the page is simply filled with zeros. In case of memory
+  shortage, the swap pager may be asked to store the contents of a page in
+  backing store.
+
+\item \mintinline{c}{OBJT_DEFAULT}: This is the pager type used in all newly
+  created anonymous mappings (i.e. zero-filled mappings not backed by any file).
+  It fills all new pages with zeros. This pager type is an optimization of the
+  swap pager for the common case where the pages never need to be swapped out to
+  backing store, as memory resources in today's systems are abundant. Not
+  needing to keep track of swap space speeds up the pager's initialization
+  procedures. When there is a need for an object with a default pager to write
+  some of its pages to backing store, its pager is changed to the swap pager.
+
+\item \mintinline{c}{OBJT_VNODE}: The contents of pages backed by a file are
+  supplied and written back by the vnode pager. An object with a vnode pager
+  acts as a general-purpose cache of the backing file's pages, used not only by
+  the virtual memory subsystem (i.e. when a process maps a file), but also when
+  a process reads files via file descriptors.
+
+\item \mintinline{c}{OBJT_DEVICE}: The device pager manages pages belonging to
+  objects which represent memory-mapped physical devices. The pages used by the
+  device pager are different from ordinary pages in that they don't represent a
+  frame of physical memory, or, in FreeBSD terminology, they are
+  \textbf{fictitious}.
+\end{itemize}
+
+\section{\mintinline{c}{vm_page}}
+
+The \mintinline{c}{vm_page} structure represents a unit of physical address
+space that can be mapped into a virtual address space. Every
+\mintinline{c}{vm_page} has a physical address, although it does not need to be
+a physical address that can be used to address physical memory. Most pages,
+though, are pages representing frames of physical memory. Pages with physical
+addresses beyond the physical memory range are called \textbf{fictitious} pages
+and are primarily used for accessing memory-mapped devices.
+
+
+\begin{listing}[H]
+\begin{minted}{c}
+struct vm_page {
+    union {
+        TAILQ_ENTRY(vm_page) q; /* Page queue or free list */
+        /* Some union fields omitted */
+    } plinks;
+    TAILQ_ENTRY(vm_page) listq; /* Pages in same object */
+    vm_object_t object;         /* Which object am I in */
+    vm_pindex_t pindex;         /* Offset into object */
+    vm_paddr_t phys_addr;       /* Physical address of page */
+    struct md_page md;          /* Machine dependent stuff */
+    u_int wire_count;           /* Wired down maps refs */
+    /* Some fields omitted */
+    uint16_t flags;             /* page PG_* flags */
+    uint8_t aflags;             /* Flags with atomic access */
+    uint8_t oflags;             /* page VPO_* flags */
+    /* Omitted */
+    u_char  act_count;          /* page usage count */
+    /* Omitted */
+};
+\end{minted}
+\caption{\texttt{vm/vm\_object.h}: Definition of \mintinline{c}{struct vm_object}}
+\end{listing}
 %%%%% BIBLIOGRAFIA
 
+\subsection*{\mintinline{c}{struct md_page md;}}
+This field contains per-page information maintained by the \mintinline{c}{pmap}
+module, i.e. the module responsible for the machine-dependent part of the mapping.
+Here is the definition of \mintinline{c}{struct md_page} for the x86
+architecture:
+
+\begin{listing}[H]
+\begin{minted}{c}
+struct md_page {
+   TAILQ_HEAD(,pv_entry) pv_list;
+   int                   pat_mode;
+};
+\end{minted}
+\caption{\texttt{i386/include/pmap.h}: Definition of \mintinline{c}{struct md_page}}
+\end{listing}
+
+The \mintinline{c}{pv_list} field is a list of structures identifying virtual
+addresses pointing to this page (there can be many of them, since a single
+\mintinline{c}{vm_object} can be shared by different
+\mintinline{c}{vm_map_entry} structures). The \mintinline{c}{pat_mode} field
+specifies caching attributes for the page.
+
+\subsection*{\mintinline{c}{uint16_t flags;} \\ \mintinline{c}{uint8_t aflags;}
+  \\ \mintinline{c}{uint8_t oflags;}}
+
+The flags for an object are split into several fields due to different
+characteristics (e.g. locks needed to read/modify the flag, whether operations
+need to be atomic). Flags contained in these fields include:
+
+\begin{itemize}
+  \item \mintinline{c}{PGA_REFERENCED}: An access has recently been made to the page.
+  \item \mintinline{c}{PG_FICTITIOUS}: The page doesn't represent a real physical frame.
+\end{itemize}
+
+
+\section{\mintinline{c}{pmap}}
+
+\begin{listing}[H]
+\begin{minted}{c}
+struct pmap {
+    struct mtx          pm_mtx;
+    pd_entry_t          *pm_pdir;       /* KVA of page directory */
+    TAILQ_HEAD(,pv_chunk)   pm_pvchunk; /* list of mappings in pmap */
+    cpuset_t            pm_active;      /* active on cpus */
+    struct pmap_statistics  pm_stats;   /* pmap statistics */
+    LIST_ENTRY(pmap)    pm_list;        /* List of all pmaps */
+    struct vm_radix     pm_root;        /* spare page table pages */
+    vm_page_t           pm_ptdpg[NPGPTD];
+};
+\end{minted}
+\caption{\texttt{i386/include/pmap.h}: Definition of \mintinline{c}{struct pmap}}
+\end{listing}
 % \begin{thebibliography}{1}
 % \bibitem{example} \ldots
 % \end{thebibliography}
