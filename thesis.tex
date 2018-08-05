@@ -600,21 +600,89 @@ need to be atomic). Flags contained in these fields include:
 
 \section{\mintinline{c}{pmap}}
 
+The \mintinline{c}{pmap} structure encapsulates the architecture-dependent
+aspects of the mapping. Most architectures provide some kind of hardware support
+for paging, for example the MMU on the x86 architecture. the MMU contains a
+hardware \textbf{page table walker}, which traverses the in-memory page table
+each time a memory access is made and the needed mapping isn't cached in the
+TLB. The TLB (Translation Look-aside Buffer) is simply a cache that contains
+mappings of recently accessed pages). The hardware page table walker expects the
+page table and page table entries to have a specific layout. This layout is
+exactly what is implemented in the x86 version of the \mintinline{c}{pmap}
+structure.
+
+\subsection{x86 page table layout}
+
+Logically, the page table is an array of 4-byte \textbf{Page Table Entries}
+(PTEs). The virtual address used to access memory is split into a
+\textbf{Virtual Page Number} (VPN) and an offset into the page. On x86, the VPN
+consists of the 20 most significant bits of the address, while the 12 least
+significant bits are the offset. The VPN is used to find the appropriate PTE.
+
+Each entry contains a \textbf{valid bit}, which tells whether or not the
+corresponding page is mapped to a frame of physical memory. The bit is set if
+and only if the page is mapped. Every entry also contains the physical address
+of the frame to which the page is mapped, provided the valid bit is set. The
+entries also describe the page's protection attributes (whether write access is
+permitted), cacheability attributes (whether its contents can be cached at all,
+as well as whether the write-through or write-back policy should be applied),
+and minimum privilege level required to access the page (user or supervisor).
+
+To help the OS to determine which resident pages are actively used and which are
+not, the PTEs contain a \textbf{referenced bit} and a \textbf{dirty bit} which
+are set by the hardware and can be read by the OS e.g. during a page fault.
+
+The last field contained in PTEs is the \textbf{global bit}. When it is set, the
+entry containing it won't get flushed from the TLB when the current page table
+is changed. Since the kernel is usually mapped into the same region of address
+space for every process, this bit can be used to avoid unnecessary page faults
+after performing a context switch by setting it in all entries mapping the
+kernel.
+
+The size of the address space is $2^{32}$ bytes and each page is $2^{12} = 4096$
+bytes large. Therefore, to describe the entire address space of a single process
+as a flat array of PTEs, we would need $4 * \frac{2^{32}}{2^{12}} = 2^{22}$
+bytes, or $4$ MiB. With hundreds of concurrently running processes on a single
+system not being uncommon, the amount of memory needed to store the page tables
+of resident processes would quickly become a bottleneck preventing the system
+from increasing its degree of multiprogramming (i.e. how many processes are
+resident in memory at the same time).
+
+The solution to this problem is to give the page table a hierarchical structure.
+The virtual address, instead of being split into 2 parts, is split into 3 parts.
+The first and second parts (bits 22-31 and 12-21 respectively, where 0 is the
+least significant bit and 31 is the most significant bit).
+
+Bits 22-31 are used as an index into the \textbf{Page Directory}, an array of
+4-byte \textbf{Page Directory Entries} (PDEs). Each PDE contains a pointer to a
+single page-sized chunk of the page table. However, if that chunk contains no
+valid entries, no physical memory is allocated for it and the PDE that points to
+it has its valid bit cleared. This allows for significant memory savings, since
+usually most of a process's address space is unmapped.
+
+Once the physical address of the page table chunk is extracted from the PDE,
+bits 12-21 are used to index the chunk and retrieve the corresponding PTE, whose
+structure has been described above.
+
 \begin{listing}[H]
 \begin{minted}{c}
+/* PGPTD = size of page directory in pages (1 in this case) */
 struct pmap {
     struct mtx          pm_mtx;
-    pd_entry_t          *pm_pdir;       /* KVA of page directory */
-    TAILQ_HEAD(,pv_chunk)   pm_pvchunk; /* list of mappings in pmap */
-    cpuset_t            pm_active;      /* active on cpus */
+    pd_entry_t          *pm_pdir;       /* VA of page directory */
+    TAILQ_HEAD(,pv_chunk)   pm_pvchunk; /* List of mappings in pmap */
+    cpuset_t            pm_active;      /* Set of CPUs using this page table */
     struct pmap_statistics  pm_stats;   /* pmap statistics */
     LIST_ENTRY(pmap)    pm_list;        /* List of all pmaps */
-    struct vm_radix     pm_root;        /* spare page table pages */
+    struct vm_radix     pm_root;        /* Tree of spare page table pages */
+    /* Table of pointers to page directory pages */
     vm_page_t           pm_ptdpg[NPGPTD];
 };
 \end{minted}
 \caption{\texttt{i386/include/pmap.h}: Definition of \mintinline{c}{struct pmap}}
 \end{listing}
+
+
 % \begin{thebibliography}{1}
 % \bibitem{example} \ldots
 % \end{thebibliography}
