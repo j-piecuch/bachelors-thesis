@@ -4,10 +4,15 @@
 \documentclass[shortabstract, english]{iithesis}
 
 \usepackage[utf8]{inputenc}
+% \usepackage{listings}
 \usepackage{enumitem}
 \usepackage{minted}
+\usepackage{caption}
 
 \setmintedinline[c]{breaklines=true}
+% \newenvironment{code}{\captionsetup{type=listing}}{}
+\newenvironment{code}{}{}
+\captionsetup[code]{type=listing}
 
 %%%%% DANE DO STRONY TYTUŁOWEJ
 % Niezaleznie od jezyka pracy wybranego w opcjach klasy, tytul i streszczenie
@@ -683,6 +688,603 @@ struct pmap {
 \end{listing}
 
 
+\chapter{Virtual Memory management}
+
+In this chapter we take a look at the inner workings of the most important
+functions carried out by the operating system when it comes to managing a
+process's virtual address space. The order in which the functions will be
+discussed roughly corresponds to the order in which these functions are invoked
+during the lifetime of a process.
+
+The first function we will discuss is the creation of a new address space. A new
+virtual address space is created whenever a new process enters the system. All
+processes in FreeBSD are created using a mechanism called \textbf{forking}. When
+a process forks, an almost identical copy of it is created by the kernel. The
+copy is called the \textbf{child}, and the forking process is called the
+\textbf{parent}. The layout of the child's virtual address space is identical to
+the one of its parent.
+
+Usually, new processes are created in order to run some executable program
+stored in a file. To do that, a process invokes the \texttt{execve} system call.
+The operating system then completely replaces the contents of the process's
+address space with the process image contained in the file.
+
+Once the program begins to execute, it accesses instructions and data using
+virtual addresses. Some of these accesses will generate \textbf{page faults},
+and the kernel has to handle them appropiately, fetching data from secondary
+storage or terminating the process if it tried to access an unmapped region.
+
+A process can also modify the layout of its own address space. The \texttt{mmap}
+system call allows a process to create a new segment of virtual memory that it
+can access, or overlay an existing one. The initial contents of these segments
+can be provided by a file from the file system or simply filled with zeros.
+
+Each section of this chapter will describe the steps taken by the kernel when
+carrying out each of these functions.
+
+\section{Address space creation -- the \texttt{fork} system call}
+
+The \texttt{fork} system call creates an almost identical clone of the calling
+process, which includes an address space cloned from the address space of the
+calling process.
+
+The \mintinline{c}{vmspace_fork} is used by the code
+implementing the system call to create a copy of an address space.
+The function takes a pointer to the \mintinline{c}{vmspace} structure of the
+calling process as an argument and returns a pointer to the copy which it has
+created.
+
+The code listing below is a simplified version of the actual implementation of
+the \mintinline{c}{vmspace_fork} function. Fragments of code which deal with
+edge cases, synchronization and accounting have been removed for clarity.
+
+\begin{code}
+\begin{minted}[fontsize=\small]{c}
+struct vmspace *
+vmspace_fork(struct vmspace *vm1, vm_ooffset_t *fork_charge)
+{
+    struct vmspace *vm2;
+    vm_map_t new_map, old_map;
+    vm_map_entry_t new_entry, old_entry;
+    vm_object_t object;
+
+    old_map = &vm1->vm_map;
+    /* Allocate a new vmspace structure with the given address range */
+    vm2 = vmspace_alloc(old_map->min_offset, old_map->max_offset, NULL);
+    /* Copy immutable fields of vm1 to vm2. */
+    vm2->vm_taddr = vm1->vm_taddr;
+    vm2->vm_daddr = vm1->vm_daddr;
+    vm2->vm_maxsaddr = vm1->vm_maxsaddr;
+    new_map = &vm2->vm_map;
+    old_entry = old_map->header.next;
+
+    /* Iterate over all entries in old_map */
+    while (old_entry != &old_map->header) {
+
+        switch (old_entry->inheritance) {
+        case VM_INHERIT_NONE:
+            /* Don't clone the entry to new_map */
+            break;
+
+        case VM_INHERIT_SHARE:
+            /*
+             * Clone the entry, but share the underlying vm_object between
+             * both entries.
+             */
+
+            /*
+             * The object may not have been created.
+             * Create it if that's the case.
+             */
+            object = old_entry->object.vm_object;
+            if (object == NULL) {
+                object = vm_object_allocate(OBJT_DEFAULT,
+                    atop(old_entry->end - old_entry->start));
+                old_entry->object.vm_object = object;
+                old_entry->offset = 0;
+            }
+
+            /*
+             * Add the reference before calling vm_object_shadow
+             * to insure that a shadow object is created.
+             */
+            vm_object_reference(object);
+            if (old_entry->eflags & MAP_ENTRY_NEEDS_COPY) {
+                /*
+                 * old_entry is a copy-on-write entry and its shadow
+                 * object hasn't been created yet (which is possible
+                 * because shadow objects are created only when necessary).
+                 * We need to create the shadow object here.
+                 * If we didn't, the entries in the child and parent
+                 * would get separate shadow objects if they attempted
+                 * to write to the region of memory represented by this
+                 * entry, which is not what we want.
+                 * We want the changes made by the parent to be visible
+                 * to the child and vice versa.
+                 */
+                vm_object_shadow(&old_entry->object.vm_object,
+                    &old_entry->offset,
+                    old_entry->end - old_entry->start);
+                old_entry->eflags &= ~MAP_ENTRY_NEEDS_COPY;
+
+                /* Transfer the second reference too. */
+                vm_object_reference(
+                    old_entry->object.vm_object);
+
+                /*
+                 * Now, instead of both the parent and child entries
+                 * referencing object, only the shadow object references
+                 * it, therefore we decrement the reference counter.
+                 */
+                vm_object_deallocate(object);
+                object = old_entry->object.vm_object;
+            }
+
+            /*
+             * Clone the entry, referencing the shared object.
+             */
+            new_entry = vm_map_entry_create(new_map);
+            *new_entry = *old_entry;
+
+            /*
+             * Insert the entry into the new map -- we know we're
+             * inserting at the end of the new map.
+             */
+            vm_map_entry_link(new_map, new_map->header.prev,
+                new_entry);
+            /*
+             * Do some bookkeeping associated with the sizes of
+             * the text, data and stack segments.
+             */
+            vmspace_map_entry_forked(vm1, vm2, new_entry);
+
+            /*
+             * Update the physical map
+             */
+            pmap_copy(new_map->pmap, old_map->pmap,
+                new_entry->start,
+                (old_entry->end - old_entry->start),
+                old_entry->start);
+            break;
+
+        case VM_INHERIT_COPY:
+            /*
+             * Clone the entry and link into the map.
+             */
+            new_entry = vm_map_entry_create(new_map);
+            *new_entry = *old_entry;
+
+            new_entry->object.vm_object = NULL;
+            vm_map_entry_link(new_map, new_map->header.prev,
+                new_entry);
+            vmspace_map_entry_forked(vm1, vm2, new_entry);
+            /*
+             * Make old_entry and new_entry point to the same vm_object.
+             * Both entries are marked copy-on-write so that the initial
+             * contents of the memory segment are identical to the
+             * parent and the child processes, but changes made by one
+             * are not visible to the other.
+             */
+            vm_map_copy_entry(old_map, new_map, old_entry,
+                new_entry, fork_charge);
+            break;
+
+        case VM_INHERIT_ZERO:
+            /*
+             * Create a new anonymous mapping entry modelled from
+             * the old one.
+             */
+            new_entry = vm_map_entry_create(new_map);
+            memset(new_entry, 0, sizeof(*new_entry));
+
+            new_entry->start = old_entry->start;
+            new_entry->end = old_entry->end;
+            new_entry->eflags = old_entry->eflags &
+                ~(MAP_ENTRY_USER_WIRED | MAP_ENTRY_IN_TRANSITION |
+                MAP_ENTRY_VN_WRITECNT);
+            new_entry->protection = old_entry->protection;
+            new_entry->max_protection = old_entry->max_protection;
+            new_entry->inheritance = VM_INHERIT_ZERO;
+
+            vm_map_entry_link(new_map, new_map->header.prev,
+                new_entry);
+            vmspace_map_entry_forked(vm1, vm2, new_entry);
+
+
+            break;
+        }
+        old_entry = old_entry->next;
+    }
+
+    return (vm2);
+}
+\end{minted}
+ \captionof{listing}{\texttt{vm/vm\_map.c}: Simplified implementation of the \mintinline{c}{vmspace_fork} function}
+\end{code}
+
+\section{Executing a new program -- the \texttt{execve} system call}
+
+A process may request the operating system to replace the program that is
+currently executing in the process with another program stored as a file in the
+file system. To do this, the process invokes the \texttt{execve} system call.
+
+Among other things, the \texttt{execve} system call is responsible for wiping
+the address space of the calling process and populating it with the image
+contained in the file supplied by the caller.
+
+The bulk of \texttt{execve} logic is contained in the \mintinline{c}{do_execve}
+function, defined in \texttt{kern/kern\_exec.c}. However, most of the address
+space management logic is implemented elsewhere. Hence, we will not the code for
+\mintinline{c}{do_execve} here.
+
+To understand the code responsible for populating an empty address space with a
+program contained in a file, it is helpful to understand the concept of
+\textbf{image activators}.
+
+The kernel supports multiple different file formats that contain an executable
+program. For instance, the file pointed to by the path passed to \texttt{execve}
+can be a plain-text script, with the first line containing the path to the
+interpreter program preceded by the characters \texttt{\#!}. For example, if a
+script begins with the line \texttt{\#!/bin/bash}, this is information to the
+kernel that the actual program to be executed is the interpreter, and the path
+to the script should be passed as an argument to the interpreter. Alternatively,
+an executable file can be an object file in the ELF (Executable and Linkable
+File) format. In that case, the kernel populates the address space according to
+the layout specified in the file.
+
+Each executable file format has its own activator. At a certain point in the
+\mintinline{c}{do_execve} function, the kernel invokes every activator, passing
+the file to execute and other parameters to it. Each activator first checks the
+initial bytes of the file to see if they match a special constant, called the
+magic number, which is assigned to a specific file format. If the activator
+detects a match for its file format, it proceeds to load the program from the
+file. Otherwise, it returns an error code and the kernel tries the next
+activator.
+
+In this thesis we will take a closer look at the activator for the ELF64 file
+format. The initial layout of the address space is described using
+\textbf{sections} and \textbf{segments}.
+
+A section contains data that serves the same or similar purpose and has the same
+protection attributes. For instance, the \texttt{.data} section contains
+statically allocated, initialized, read-write data for use by the program, and
+the \texttt{.text} section contains read-only program code.
+
+A segment comprises a number of sections and has a specified virtual address at
+which it is to be loaded. The sections comprising the segment are loaded into
+memory starting at the segment's initial address and continuing, one section
+after another.
+
+The image activator for the ELF64 file format is a function called
+\mintinline{c}{exec_elf64_imgact}. We are only interested in the part which
+scans the table of program headers (which describe individual segments) and
+loads appropriate segments into memory, which is shown below.
+
+\begin{listing}[H]
+\begin{minted}[fontsize=\small]{c}
+/*
+ * hdr - ELF header, contains general information about the file
+ * phdr - array of program headers, which describe segments
+ */
+for (i = 0; i < hdr->e_phnum; i++) { /* For each segment... */
+    switch (phdr[i].p_type) {
+    case PT_LOAD:   /* Loadable segment */
+        if (phdr[i].p_memsz == 0)
+            /* Nothing to load */
+            break;
+
+        /* Read the segment's protection attributes */
+        prot = elf64_trans_prot(phdr[i].p_flags);
+        /* Load the segment into the address space */
+        elf64_load_section(imgp, phdr[i].p_offset,
+            (caddr_t)(uintptr_t)phdr[i].p_vaddr,
+            phdr[i].p_memsz, phdr[i].p_filesz, prot);
+
+        break;
+    /*
+     * Other cases omitted
+     */
+    default:
+        break;
+    }
+}
+\end{minted}
+  \caption{\texttt{kern/imgact\_elf.c}: fragment of the
+    \mintinline{c}{exec_elf64_imgact} function mapping program segments into the
+    address space of the calling process}
+\end{listing}
+
+The confusingly named \mintinline{c}{elf64_load_section} function loads
+individual segments into the virtual address space. Most of its code handles the
+case when the size of a segment in memory is larger than the size of the segment
+in the executable file and the end of the mapping backed by the file is not on a
+page boundary. The mapping of the segment is done inside the
+\mintinline{c}{elf64_map_insert} function.
+
+The \mintinline{c}{elf64_map_insert} function is responsible for mapping a range
+of offsets inside a \mintinline{c}{vm_object} to a range of virtual addresses in
+a \mintinline{c}{vm_map}. It also contains code to handle edge cases, but the
+essence has been distilled in the code listing below.
+
+\begin{listing}[H]
+\begin{minted}[fontsize=\small]{c}
+static int
+elf64_map_insert(struct image_params *imgp, vm_map_t map, vm_object_t object,
+    vm_ooffset_t offset, vm_offset_t start, vm_offset_t end, vm_prot_t prot,
+    int cow)
+{
+    struct sf_buf *sf;
+    vm_offset_t off;
+    vm_size_t sz;
+    int error, locked, rv;
+
+    /*
+     * Handle edge cases where the start/end virtual addresses
+     * are not page-aligned.
+     */
+    if (start != trunc_page(start)) {
+        /* ... */
+    }
+    if (end != round_page(end)) {
+        /* ... */
+    }
+    if ((offset & PAGE_MASK) != 0) {
+        /*
+         * Another edge case: (offset % PAGE_SIZE) != (start % PAGE_SIZE)
+         * This means that we have to copy the data.
+         */
+         /* ... */
+    } else {
+        /*
+         * This is the most common code path: no edge cases,
+         * simply map a range of pages in the vm_object to a range
+         * of virtual pages in the address space
+         */
+        vm_object_reference(object);
+        rv = vm_map_fixed(map, object, offset, start, end - start,
+            prot, VM_PROT_ALL, cow | MAP_CHECK_EXCL);
+    }
+    return (KERN_SUCCESS);
+}
+\end{minted}
+  \caption{\texttt{kern/imgact\_elf.c}: fragment of the
+    \mintinline{c}{exec_elf64_imgact} function mapping program segments into the
+    address space of the calling process}
+\end{listing}
+
+\section{Handling page faults}
+
+Once a process begins execution, it is almost inevitable that at some point it
+will attempt to access an page of virtual memory that isn't currently resident.
+When it happens, control is passed to the kernel, which attempts to bring the
+page into physical memory and resume the process which caused the page fault.
+
+The main function responsible for handling page faults is
+\mintinline{c}{vm_fault_hold}. Its arguments include the \mintinline{c}{vm_map}
+of the faulting process, the virtual address that the process attempted to
+access, and what type of access was attempted (read or write).
+
+It begins by looking up the \mintinline{c}{vm_map_entry} corresponding to the
+address. It then follows the chain of shadow objects starting at the entry's
+backing object, looking for an object that contains the needed page. If an
+object with the page is found and the fault is a write fault (the process
+attempted to write to the page), the copied is copied to the first object in the
+chain. If it is just a read fault, the page can be simply mapped into the
+address space, without the need to copy or move it. The following code listing
+shows the algorithm in more detail.
+
+\begin{code}
+\begin{minted}[fontsize=\small]{c}
+int
+vm_fault_hold(vm_map_t map, vm_offset_t vaddr, vm_prot_t fault_type,
+    int fault_flags, vm_page_t *m_hold)
+{
+    /*
+     * The faultstate structure records the parts of the
+     * current state of the handler which are most commonly
+     * passed to helper functions. Its fields are:
+     * map: vm_map of the faulting process
+     * first_object, first_index, first_m and
+     * object, index, m:
+     *   object, offset into the object and page corresponding
+     *   to faulting address withing the first and current
+     *   vm_object in the chain
+     * entry: vm_map_entry containing the faulting page
+     */
+    struct faultstate fs;
+    vm_object_t next_object;
+    vm_prot_t prot;
+    boolean_t wired;
+    int behind, ahead;
+
+RetryFault:;
+
+    /*
+     * Find the backing store object and offset into it to begin the
+     * search.
+     */
+    fs.map = map;
+    vm_map_lookup(&fs.map, vaddr, fault_type |
+        VM_PROT_FAULT_LOOKUP, &fs.entry, &fs.first_object,
+        &fs.first_pindex, &prot, &wired);
+
+    fs.first_m = NULL;
+
+    /*
+     * Set the initial (object, offset) pair that will be used
+     * to query objects for the page we're looking for
+     */
+    fs.object = fs.first_object;
+    fs.pindex = fs.first_pindex;
+    while (TRUE) {
+
+        /*
+         * See if page is resident
+         */
+        fs.m = vm_page_lookup(fs.object, fs.pindex);
+        if (fs.m != NULL) {
+            /*
+             * Block and retry if the page is busy.
+             */
+            if (vm_page_busied(fs.m)) {
+                if (fs.m == vm_page_lookup(fs.object,
+                    fs.pindex)) {
+                    vm_page_sleep_if_busy(fs.m, "vmpfw");
+                }
+                goto RetryFault;
+            }
+
+            /*
+             * Mark page busy for other processes.
+             */
+            vm_page_xbusy(fs.m);
+            /* We found the page to be copied to fs.m */
+            break; /* Break to PAGE HAS BEEN FOUND. */
+        }
+
+        /*
+         * Page is not resident. If the pager might contain the page
+         * or this is the beginning of the search, allocate a new
+         * page. (Default objects are zero-fill, so there is no real
+         * pager for them.)
+         */
+        if (fs.object->type != OBJT_DEFAULT ||
+            fs.object == fs.first_object) {
+
+            /*
+             * Allocate a new page for this object/offset pair.
+             */
+            fs.m = vm_page_alloc(fs.object, fs.pindex,
+                alloc_req);
+            if (fs.m == NULL) {
+                /* No pages available. Block and retry. */
+                vm_waitpfault();
+                goto RetryFault;
+            }
+        }
+
+        /*
+         * Call the pager to retrieve the page if there is a chance
+         * that the pager has it, and potentially retrieve additional
+         * pages at the same time.
+         */
+        if (fs.object->type != OBJT_DEFAULT) {
+
+            /*
+             * Calculate how many surrounding pages we should ask the
+             * pager for, determining the values of ahead and behind.
+             */
+
+
+            /* Get the pages */
+            rv = vm_pager_get_pages(fs.object, &fs.m, 1,
+                &behind, &ahead);
+            if (rv == VM_PAGER_OK) {
+                /* Now we have the page to move to first_page */
+                break; /* Break to PAGE HAS BEEN FOUND. */
+            }
+
+            /*
+             * If an I/O error occurred or the requested page was
+             * outside the range of the pager, clean up and return
+             * an error.
+             */
+            if (rv == VM_PAGER_ERROR || rv == VM_PAGER_BAD) {
+                vm_page_free(fs.m);
+                fs.m = NULL;
+                unlock_and_deallocate(&fs);
+                return (rv == VM_PAGER_ERROR ? KERN_FAILURE :
+                    KERN_PROTECTION_FAILURE);
+            }
+
+            /*
+             * The requested page does not exist at this object/
+             * offset. Remove the invalid page from the object,
+             * waking up anyone waiting for it, and continue on to
+             * the next object.  However, if this is the top-level
+             * object, we must leave the busy page in place to
+             * prevent another process from rushing past us, and
+             * inserting the page in that object at the same time
+             * that we are.
+             */
+            if (fs.object != fs.first_object) {
+                vm_page_free(fs.m);
+                fs.m = NULL;
+            }
+        }
+
+        /*
+         * We get here if the object has default pager
+         * or the pager doesn't have the page.
+         */
+        if (fs.object == fs.first_object)
+            fs.first_m = fs.m;
+
+        /* Move on to the next object. */
+        next_object = fs.object->backing_object;
+        if (next_object == NULL) {
+            /*
+             * If there's no object left, fill the page in the top
+             * object with zeros.
+             */
+            if (fs.object != fs.first_object) {
+                fs.object = fs.first_object;
+                fs.pindex = fs.first_pindex;
+                fs.m = fs.first_m;
+            }
+            fs.first_m = NULL;
+
+            /* Zero the page and mark it valid. */
+            pmap_zero_page(fs.m);
+            fs.m->valid = VM_PAGE_BITS_ALL;
+
+            break;  /* Break to PAGE HAS BEEN FOUND. */
+        }
+
+        /* Adjust object offset. */
+        fs.pindex += OFF_TO_IDX(fs.object->backing_object_offset);
+        fs.object = next_object;
+    }
+
+    /*
+     * PAGE HAS BEEN FOUND. [Loop invariant still holds -- the object lock
+     * is held.]
+     */
+
+    /*
+     * If the page is being written, but isn't already owned by the
+     * top-level object, we have to copy it into a new page owned by the
+     * top-level object.
+     */
+    if (fs.object != fs.first_object) {
+        /*
+         * We only really need to copy if we want to write it.
+         */
+        if ((fault_type & (VM_PROT_COPY | VM_PROT_WRITE)) != 0) {
+            pmap_copy_page(fs.m, fs.first_m);
+            fs.first_m->valid = VM_PAGE_BITS_ALL;
+            /* We no longer need the old page or object. */
+            release_page(&fs);
+            /*
+             * Only use the new page below...
+             */
+            fs.object = fs.first_object;
+            fs.pindex = fs.first_pindex;
+            fs.m = fs.first_m;
+        } else {
+            prot &= ~VM_PROT_WRITE;
+        }
+    }
+
+    /* Put this page into the physical map. */
+    pmap_enter(fs.map->pmap, vaddr, fs.m, prot,
+        fault_type | (wired ? PMAP_ENTER_WIRED : 0), 0);
+
+    return (KERN_SUCCESS);
+}
+\end{minted}
+  \captionof{listing}{\texttt{vm/vm\_fault.c}: Simplified implementation of the \mintinline{c}{vm_fault_hold} function}
+\end{code}
 % \begin{thebibliography}{1}
 % \bibitem{example} \ldots
 % \end{thebibliography}
