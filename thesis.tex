@@ -97,6 +97,15 @@
 
 \chapter{Introduction}
 
+\pwit{W CAŁEJ pracy brakuje odnośników do literatury. Rozumiem np., że
+  poniższa sekcja przypomina podstawową terminologię dotyczącą pamięci
+  wirtualnej, ale pozostaje mnóstwo niuansów, których nie chcemy tu
+  omawiać. Czytelnik powinien się dowiedzieć, gdzie o tych niuansach
+  powinien przeczytać. Można dodać akapit o literaturze na początku
+  (mniej pracochłonne) lub przy każdym pojęciu umieścić odnośnik do
+  konkretnej strony/rodziału któregoś z podręczników (to jest
+  b. pracochłonne, być nie we wszystkich ale w niektórych miejscach
+  warto to zrobić)}
 
 \section{What is virtual memory?}
 
@@ -607,7 +616,7 @@ need to be atomic). Flags contained in these fields include:
 
 The \mintinline{c}{pmap} structure encapsulates the architecture-dependent
 aspects of the mapping. Most architectures provide some kind of hardware support
-for paging, for example the MMU on the x86 architecture. the MMU contains a
+for paging, for example the MMU on the x86 architecture. The MMU contains a
 hardware \textbf{page table walker}, which traverses the in-memory page table
 each time a memory access is made and the needed mapping isn't cached in the
 TLB. The TLB (Translation Look-aside Buffer) is simply a cache that contains
@@ -737,6 +746,8 @@ created.
 The code listing below is a simplified version of the actual implementation of
 the \mintinline{c}{vmspace_fork} function. Fragments of code which deal with
 edge cases, synchronization and accounting have been removed for clarity.
+
+\pwit{Poniższy kod wymaga kilku/nastu zdań komentarza. Podobnie pozostały kod w CAŁEJ pracy}
 
 \begin{code}
 \begin{minted}[fontsize=\small]{c}
