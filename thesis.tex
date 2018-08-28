@@ -1296,6 +1296,600 @@ RetryFault:;
 \end{minted}
   \captionof{listing}{\texttt{vm/vm\_fault.c}: Simplified implementation of the \mintinline{c}{vm_fault_hold} function}
 \end{code}
+
+\section{Adding new mappings - the \texttt{mmap} system call}
+
+A process has the ability to introduce new mapped regions into its virtual
+address space using the \texttt{mmap} system call. It can create zero-filled
+anonymous mappings, as well as mappings whose contents are provided by a file.
+The \mintinline{c}{kern_mmap} function implements the whole system call.
+
+\begin{code}
+\begin{minted}[fontsize=\small]{c}
+int
+kern_mmap(struct thread *td, uintptr_t addr, size_t size, int prot, int flags,
+    int fd, off_t pos)
+{
+    struct vmspace *vms;
+    struct file *fp;
+    vm_offset_t addr;
+    vm_size_t pageoff;
+    vm_prot_t cap_maxprot;
+    int align, error;
+    cap_rights_t rights;
+
+    vms = td->td_proc->p_vmspace;
+    fp = NULL;
+
+    if (flags & MAP_STACK) {
+        flags |= MAP_ANON;
+        pos = 0;
+    }
+
+    /*
+     * Align the file position to a page boundary,
+     * and save its page offset component.
+     */
+    pageoff = (pos & PAGE_MASK);
+    pos -= pageoff;
+
+    /* Adjust size for rounding (on both ends). */
+    size += pageoff;            /* low end... */
+    size = (vm_size_t) round_page(size);    /* hi end */
+
+    /* Check for illegal addresses. */
+    if (flags & MAP_FIXED) {
+        /*
+         * The specified address must have the same remainder
+         * as the file offset taken modulo PAGE_SIZE, so it
+         * should be aligned after adjustment by pageoff.
+         */
+        addr -= pageoff;
+        if (addr & PAGE_MASK)
+            return (EINVAL);
+
+        /* Address range must be all in user VM space. */
+        if (addr < vm_map_min(&vms->vm_map) ||
+            addr + size > vm_map_max(&vms->vm_map))
+            return (EINVAL);
+        if (addr + size < addr)
+            return (EINVAL);
+    } else {
+        /*
+         * For non-fixed mappings where no hint is provided or
+         * the hint would fall in the potential heap space,
+         * place it after the end of the largest possible heap.
+         */
+        if (addr == 0 ||
+            (addr >= round_page((vm_offset_t)vms->vm_taddr) &&
+            addr < round_page((vm_offset_t)vms->vm_daddr +
+            lim_max(td, RLIMIT_DATA))))
+            addr = round_page((vm_offset_t)vms->vm_daddr +
+                lim_max(td, RLIMIT_DATA));
+    }
+
+    /*
+     * Guard mappings are used only to reserve address space,
+     * hence their protection is VM_PROT_NONE.
+     */
+    if ((flags & MAP_GUARD) != 0) {
+        error = vm_mmap_object(&vms->vm_map, &addr, size, VM_PROT_NONE,
+            VM_PROT_NONE, flags, NULL, pos, FALSE, td);
+    } else if ((flags & MAP_ANON) != 0) {
+        /* Mapping blank space is trivial. */
+        error = vm_mmap_object(&vms->vm_map, &addr, size, prot,
+            VM_PROT_ALL, flags, NULL, pos, FALSE, td);
+    } else {
+        /*
+         * Mapping file, get fp for validation and don't let the
+         * descriptor disappear on us if we block. Check capability
+         * rights, but also return the maximum rights to be combined
+         * with maxprot later.
+         */
+        error = fget_mmap(td, fd, &rights, &cap_maxprot, &fp);
+        if (error != 0)
+            goto done;
+
+        /* Actually map the file. */
+        error = fo_mmap(fp, &vms->vm_map, &addr, size, prot,
+            cap_maxprot, flags, pos, td);
+    }
+
+done:
+    if (fp)
+        fdrop(fp, td);
+
+    return (error);
+}
+\end{minted}
+  \captionof{listing}{\texttt{vm/vm\_mmap.c}: Simplified implementation of the
+    \mintinline{c}{kern_mmap} function}
+\end{code}
+
+The function that actually inserts the new mapping into the calling process's
+address space is the \mintinline{c}{vm_map_object} function. It does some basic
+sanity checks, after which it calls \mintinline{c}{vm_map_find_min} or
+\mintinline{c}{vm_map_fixed}. Both are functions that result in a new
+\mintinline{c}{vm_map_entry} being added to the map.
+
+\begin{code}
+\begin{minted}[fontsize=\small]{c}
+int
+vm_mmap_object(vm_map_t map, vm_offset_t *addr, vm_size_t size, vm_prot_t prot,
+    vm_prot_t maxprot, int flags, vm_object_t object, vm_ooffset_t foff,
+    boolean_t writecounted, struct thread *td)
+{
+    boolean_t fitit;
+    vm_offset_t max_addr;
+    int docow, findspace, rv;
+
+    /*
+     * MAP_FIXED means the mapping needs to begin exactly at
+     * *addr and *addr needs to be page-aligned.
+     */
+    if ((flags & MAP_FIXED) == 0) {
+        fitit = TRUE;
+        *addr = round_page(*addr);
+    } else {
+        if (*addr != trunc_page(*addr))
+            return (EINVAL);
+        fitit = FALSE;
+    }
+
+    /* Various flag conversions */
+    if (flags & MAP_ANON) {
+        docow = 0;
+    } else if (flags & MAP_PREFAULT_READ)
+        docow = MAP_PREFAULT;
+    else
+        docow = MAP_PREFAULT_PARTIAL;
+
+    if ((flags & (MAP_ANON|MAP_SHARED)) == 0)
+        docow |= MAP_COPY_ON_WRITE;
+    /* Shared memory is also shared with children. */
+    if (flags & MAP_SHARED)
+        docow |= MAP_INHERIT_SHARE;
+    if (flags & MAP_STACK) {
+        if (object != NULL)
+            return (EINVAL);
+        docow |= MAP_STACK_GROWS_DOWN;
+    }
+    if ((flags & MAP_GUARD) != 0)
+        docow |= MAP_CREATE_GUARD;
+
+    if (fitit) {
+        /*
+         * Here *addr is only a hint, so the real start address
+         * of the allocated entry may be different.
+         */
+
+        /* Convert alignment flags. */
+        if ((flags & MAP_ALIGNMENT_MASK) == MAP_ALIGNED_SUPER)
+            findspace = VMFS_SUPER_SPACE;
+        else if ((flags & MAP_ALIGNMENT_MASK) != 0)
+            findspace = VMFS_ALIGNED_SPACE(flags >>
+                MAP_ALIGNMENT_SHIFT);
+        else
+            findspace = VMFS_OPTIMAL_SPACE;
+
+        max_addr = 0; /* Means there's no maximum. */
+
+        /* Find free space in the map and insert a new entry. */
+        rv = vm_map_find_min(map, object, foff, addr, size,
+            round_page((vm_offset_t)td->td_proc->p_vmspace->
+            vm_daddr + lim_max(td, RLIMIT_DATA)), max_addr,
+            findspace, prot, maxprot, docow);
+    } else {
+        /* Try to insert an entry at exactly *addr. */
+        rv = vm_map_fixed(map, object, foff, *addr, size,
+            prot, maxprot, docow);
+    }
+
+    if (rv == KERN_SUCCESS) {
+        /*
+         * If the process has requested that all future mappings
+         * be wired, then heed this.
+         */
+        if (map->flags & MAP_WIREFUTURE) {
+            vm_map_wire(map, *addr, *addr + size,
+                VM_MAP_WIRE_USER | ((flags & MAP_STACK) ?
+                VM_MAP_WIRE_HOLESOK : VM_MAP_WIRE_NOHOLES));
+        }
+    }
+    return (vm_mmap_to_errno(rv));
+}
+\end{minted}
+  \captionof{listing}{\texttt{vm/vm\_mmap.c}: Simplified implementation of the
+    \mintinline{c}{vm_mmap_object} function}
+\end{code}
+
+\chapter{Virtual Memory initialization on the x86 architecture}
+
+Every architecture has a lot of aspects whose specifics differ between different
+architectures, and sometimes even between revisions of the same architecture.
+One example is boot-time initialization of the virtual memory subsystem, which
+includes setting up the initial kernel page table (if any) and reserving memory
+used by low-level components. Of course, we would like as much portable code as
+possible, therefore it is crucial to properly identify machine-dependent aspects
+of system operation and abstract them away behind a common interface.
+
+When it comes to virtual memory management, the FreeBSD kernel maximizes
+portability by hiding architecture-specific implementation details inside the
+\texttt{pmap} module, which exposes an abstract interface to low-level VM
+initialization page table management. This chapter focuses on the boot-time
+machine-dependent initialization process as implemented in the 32-bit x86
+version of the kernel.
+
+\subsection{Kernel virtual address space layout}
+
+Until recently, the kernel and user address spaces used to occupy the same
+virtual address space. That is, the address space of every user process had the
+kernel mapped into the upper 1GiB, so that switching between executing user and
+kernel code could be less costly in terms of performance.
+
+However, recently discovered security vulnerabilities affecting (among others)
+x86 processors, dubbed ``Meltdown'' and ``Spectre'', allow an unprivileged
+process to read the contents of its entire address space, including possibly
+sensitive information stored in the kernel portion of the address space. To
+mitigate these vulnerabilities, the kernel no longer shares its address space
+with user processes.
+
+Any user process has at its disposal almost the entire 4GiB of virtual address
+space, and so does the kernel. This comes at a cost of a greater performance
+penalty when switching between executing user and kernel code. Previously, it
+wasn't necessary to flush the TLB (i.e. invalidate all entries) when jumping
+from user to kernel code and vice versa, but now it has become necessary to do
+so, which results in a higher rate of page faults.
+
+There remains a little bit of address space inside a user process that is still
+inaccessible to it. That part of the address space is called the
+\textbf{trampoline}, since usually executions jumps into it only to quickly jump
+out of it. For instance, code that handles exceptions and interrupts and
+switches the page table to the kernel page table can be found in the trampoline
+area. After the new page table is installed, execution jumps to lower addresses,
+where the remainder of kernel code resides.
+
+The exact layout of the kernel virtual address space is as follows:
+\begin{itemize}
+\item \texttt{0x00000000 - 0x003fffff} (0-4MiB): Transient identity mapping of
+  low memory, normally disabled to catch NULL dereference attempts.
+\item \texttt{0x00400000 - 0x007fffff} (4-8MiB): Mapping of the same low memory,
+  but this mapping isn't transient
+\item \texttt{0x00800000 - 0xffbfffff}: General purpose area containing kernel
+  text and data. Managed by the machine-independent part of the VM sybsystem.
+\item \texttt{0xffc00000 - 0xffdfffff}: Recursive mapping of the kernel page
+  table.
+\item \texttt{0xffe00000 - 0xffffffff}: Trampoline area shared between the
+  kernel and the user.
+\end{itemize}
+
+\subsection{Boot-time virtual memory initialization}
+
+When the system starts up, the MMU is disabled, so the CPU addresses physical
+memory directly. The first code that is executed by the CPU is the firmware
+found in the motherboard's ROM (Read-Only Memory). That firmware (also called
+the BIOS - Basic Input/Output System) initializes the hardware at the lowest
+level of abstraction and provides the rest of the software with a more abstract
+and uniform interface to the hardware.
+
+The BIOS then finds a device to boot from and loads into memory a program called
+the \textbf{bootloader}. The bootloader's job is to find the file containing the
+kernel image, load it into memory, and transfer control to it.
+
+Once the kernel code starts running, the CPU is still addressing physical memory
+directly. The kernel's entry point on the x86 architecture can be found in the
+file \texttt{i386/i386/locore.s}. The code in the file identifies the CPU and
+converts boot information passed to the kernel into a common format. Other than
+that, it calls C procedures that initialize the system.
+
+The first stage of VM subsystem initialization sets up a minimal kernel page
+table that maps the range of virtual addresses containing the kernel image to
+identical physical addresses, and then enables the MMU. All this is done in the
+\mintinline{c}{pmap_cold} procedure presented below.
+
+\begin{code}
+\begin{minted}[fontsize=\small]{c}
+/*
+ * Called from locore.s before paging is enabled. Sets up the first
+ * kernel page table.
+ */
+void
+pmap_cold(void)
+{
+    u_long a;
+    u_int cr3;
+
+    /* physfree - physical address of first free physical page */
+    physfree = (u_long)&_end;
+    /*
+     * NBPDR - size in bytes of the range mapped by a single
+     * PDE (Page Directory Entry). In our case it's 4MiB.
+     */
+    physfree = roundup2(physfree, NBPDR);
+    KERNend = physfree;
+
+    /*
+     * Allocate kernel page table pages.
+     * The allocpages function simply returns the value of
+     * physfree and increments it by the requested number of pages.
+     * NKPT - initial number of kernel page table pages. Must be
+     * sufficient to map the array of vm_page structures representing
+     * physical memory.
+     */
+    KPTphys = allocpages(NKPT, &physfree);
+    /*
+     * KPTmap points to a linear mapping of kernel page table pages.
+     * Since NKPT is not enough pages to contain the entire page table,
+     * later we'll allocate a larger number of pages of virtual address space
+     * (not physical pages) to be able to provide a view of the entire
+     * page table.
+     */
+    KPTmap = (pt_entry_t *)KPTphys;
+
+    /*
+     * Allocate Page Table Directory.
+     * NPGPTD - size of the Page Table Directory (PTD) in pages.
+     */
+    IdlePTD = (pd_entry_t *)allocpages(NPGPTD, &physfree);
+
+    /*
+     * Install page tables into PTD. Page table page 1 is wasted.
+     * The ptoa function converts a page number to an address simply
+     * by multiplying the page number by 4096 (the page size).
+     */
+    for (a = 0; a < NKPT; a++)
+        IdlePTD[a] = (KPTphys + ptoa(a)) | PG_V | PG_RW | PG_A | PG_M;
+
+    /*
+     * Install recursive mapping for kernel page tables into
+     * itself.
+     * PTDPTDI - PTD index of the recursive mapping
+     * (i.e. the page directory entry at index PTDPTDI points to
+     * the page directory itself).
+     */
+    for (a = 0; a < NPGPTD; a++)
+        IdlePTD[PTDPTDI + a] = ((u_int)IdlePTD + ptoa(a)) | PG_V |
+            PG_RW;
+
+    /*
+     * Initialize page table pages mapping physical address zero
+     * through the (physical) end of the kernel.  Many of these
+     * pages must be reserved, and we reserve them all and map
+     * them linearly for convenience.
+     * This and all other page table entries allow read and write
+     * access for various reasons. Kernel mappings never have any
+     * access restrictions.
+     *
+     * The pmap_cold_mapident(pa, cnt) function maps cnt pages
+     * starting at address pa to virtual pages starting at the same
+     * address.
+     * The pmap_cold(pa, va, cnt) function does the same thing,
+     * but now the virtual address can be specified.
+     */
+
+    /*
+     * Map first 4MiB of VAS to first 4MiB of PAS
+     * The atop function converts an address to the number of
+     * the page containing that address.
+     */
+    pmap_cold_mapident(0, atop(NBPDR));
+    /* Map second 4MiB of VAS to first 4MiB of PAS */
+    pmap_cold_map(0, NBPDR, atop(NBPDR));
+
+    /*
+     * Identity map the kernel image.
+     * KERNBASE - physical load address of the kernel.
+     */
+    pmap_cold_mapident(KERNBASE, atop(KERNend - KERNBASE));
+
+    /* Map page table directory. */
+    pmap_cold_mapident((u_long)IdlePTD, NPGPTD);
+
+    /* Map early KPTmap. It is really pmap_cold_mapident. */
+    pmap_cold_map(KPTphys, (u_long)KPTmap, NKPT);
+
+    /*
+     * The cr3 register contains the physical address of the
+     * page directory
+     */
+    cr3 = (u_int)IdlePTD;
+    load_cr3(cr3);
+    /* Set flag in cr0 that enables paging. */
+    load_cr0(rcr0() | CR0_PG);
+
+    /* We're now using virtual addresses. */
+
+    /*
+     * Remove the lowest part of the double mapping of low memory
+     * to get some null pointer checks.
+     */
+    IdlePTD[0] = 0;
+    load_cr3(cr3);      /* Invalidate TLB */
+}
+\end{minted}
+  \captionof{listing}{\texttt{i386/i386/pmap.c}: Simplified implementation of
+    the \mintinline{c}{pmap_cold} function}
+\end{code}
+
+After calling \mintinline{c}{pmap_cold}, the \mintinline{c}{init386} procedure is
+called to perform most of machine-dependent initialization of the whole system.
+Only a small part of the procedure is concerned with initializing the VM
+subsystem. The \mintinline{c}{getmemsize} function is called to detect available
+segments of physical memory, as well as test it by writing and reading back bit
+patterns from every page of physical memory (other than the ones containing the kernel).
+In order to be able to do that, pieces of kernel address space have to be
+reserved, for instance to temporarily map the physical page being tested.
+This is done in the \mintinline{c}{pmap_bootstrap} procedure, which is called
+from \mintinline{c}{getmemsize}. Its simplified code is presented below
+
+\begin{code}
+\begin{minted}[fontsize=\small]{c}
+/*
+ *  Bootstrap the system enough to run with virtual memory.
+ *
+ *  On the i386 this is called after mapping has already been enabled
+ *  in locore.s with the page table created in pmap_cold(),
+ *  and just syncs the pmap module with what has already been done.
+ */
+void
+pmap_bootstrap(vm_paddr_t firstaddr)
+{
+    vm_offset_t va;
+    pt_entry_t *pte;
+    struct pcpu *pc;
+    int i;
+
+    /*
+     * Add a physical memory segment (vm_phys_seg) corresponding to the
+     * preallocated kernel page table pages so that vm_page structures
+     * representing these pages will be created.  The vm_page structures
+     * are required for promotion of the corresponding kernel virtual
+     * addresses to superpage mappings.
+     */
+    vm_phys_add_seg(KPTphys, KPTphys + ptoa(nkpt));
+
+    /* Initialize the first available kernel virtual address. */
+    virtual_avail = (vm_offset_t)firstaddr;
+
+    virtual_end = VM_MAX_KERNEL_ADDRESS;
+
+    /*
+     * Initialize the kernel pmap (which is statically allocated).
+     */
+    kernel_pmap->pm_pdir = IdlePTD;
+
+    /*
+     * Reserve some special page table entries/VA space for temporary
+     * mapping of pages.
+     */
+#define SYSMAP(c, p, v, n)  \
+    v = (c)va; va += ((n)*PAGE_SIZE); p = pte; pte += (n);
+
+    va = virtual_avail;
+    pte = vtopte(va);
+
+    /*
+     * Initialize temporary map objects on the current CPU for use
+     * during early boot.
+     * CMAP1/CMAP2 are used for zeroing and copying pages.
+     * CMAP3 is used for the boot-time memory test.
+     */
+    pc = get_pcpu();
+    mtx_init(&pc->pc_cmap_lock, "SYSMAPS", NULL, MTX_DEF);
+    SYSMAP(caddr_t, pc->pc_cmap_pte1, pc->pc_cmap_addr1, 1)
+    SYSMAP(caddr_t, pc->pc_cmap_pte2, pc->pc_cmap_addr2, 1)
+    SYSMAP(vm_offset_t, pte, pc->pc_qmap_addr, 1)
+
+    SYSMAP(caddr_t, CMAP3, CADDR3, 1);
+
+    /*
+     * KPTmap is used by pmap_kextract().
+     *
+     * KPTmap is first initialized by pmap_cold.  However, that initial
+     * KPTmap can only support NKPT page table pages.  Here, a larger
+     * KPTmap is created that can support KVA_PAGES page table pages.
+     */
+    SYSMAP(pt_entry_t *, KPTD, KPTmap, KVA_PAGES)
+
+    for (i = 0; i < NKPT; i++)
+        KPTD[i] = (KPTphys + ptoa(i)) | PG_RW | PG_V;
+
+    virtual_avail = va;
+
+}
+\end{minted}
+  \captionof{listing}{\texttt{i386/i386/pmap.c}: Simplified implementation of
+    the \mintinline{c}{pmap_bootstrap} function}
+\end{code}
+
+
+The last step in initializing the \texttt{pmap} module comes after kernel memory
+allocators have been bootstrapped and are ready to use. The
+\mintinline{c}{pmap_init} procedure allocates global data structures used by the
+module and initializes the \mintinline{c}{vm_page} structures used for the
+kernel page table. Simplified code of the procedure is listed below.
+
+\begin{code}
+\begin{minted}[fontsize=\small]{c}
+/*
+ *  Initialize the pmap module.
+ *  Called by vm_init, to initialize any structures that the pmap
+ *  system needs to map virtual memory.
+ */
+void
+pmap_init(void)
+{
+    struct pmap_preinit_mapping *ppim;
+    vm_page_t mpte;
+    vm_size_t s;
+    int i, pv_npg;
+
+    /*
+     * Initialize the vm_page array entries for the kernel pmap's
+     * page table pages.
+     */
+    for (i = 0; i < NKPT; i++) {
+        mpte = PHYS_TO_VM_PAGE(KPTphys + ptoa(i));
+        mpte->pindex = i + KPTDI;
+        mpte->phys_addr = KPTphys + ptoa(i);
+        mpte->wire_count = 1;
+    }
+    vm_wire_add(NKPT);
+
+    /*
+     * Initialize the address space for the pv_entries.  Set a
+     * high water mark so that the system can recover from excessive
+     * numbers of pv entries.
+     */
+
+    /*
+     * shpgperproc - maximum number of pages that a process can
+     * share with other processes
+     * pv_entry_max - maximum number of pv_entries in the system
+     */
+    pv_entry_max = shpgperproc * maxproc + vm_cnt.v_page_count;
+    pv_entry_max = roundup(pv_entry_max, _NPCPV);
+    pv_entry_high_water = 9 * (pv_entry_max / 10);
+
+    /*
+     * Calculate the size of the pv head table for superpages.
+     */
+    pv_npg = trunc_4mpage(vm_phys_segs[vm_phys_nsegs - 1].end -
+        PAGE_SIZE) / NBPDR + 1;
+
+    /*
+     * Every struct vm_page in the global vm_page array represents
+     * a physical page of size PAGE_SIZE has a pv_entry list header
+     * embedded into it. We also need a pv_entry list header for each
+     * physical superpage. Here we allocate an array containing a
+     * pv_entry list header for each physical superpage.
+     */
+    s = (vm_size_t)(pv_npg * sizeof(struct md_page));
+    s = round_page(s);
+    pv_table = (struct md_page *)kmem_malloc(s, M_WAITOK | M_ZERO);
+    for (i = 0; i < pv_npg; i++)
+        TAILQ_INIT(&pv_table[i].pv_list);
+
+    /*
+     * A pv_chunk is a page-sized structures holding pv_entries associated
+     * with the same pmap. Here we determine how much address space we need
+     * to reserve to be able to hold as many pv_chunks as required.
+     */
+    pv_maxchunks = MAX(pv_entry_max / _NPCPV, maxproc);
+    /* Allocate kernel address space for the chunks. */
+    pv_chunkbase = (struct pv_chunk *)kva_alloc(PAGE_SIZE * pv_maxchunks);
+    pmap_ptelist_init(&pv_vafree, pv_chunkbase, pv_maxchunks);
+
+    pmap_initialized = 1;
+    /* Initialize the trampoline area. */
+    pmap_init_trm();
+
+}
+\end{minted}
+  \captionof{listing}{\texttt{i386/i386/pmap.c}: Simplified implementation of
+    the \mintinline{c}{pmap_init} function}
+\end{code}
+
 % \begin{thebibliography}{1}
 % \bibitem{example} \ldots
 % \end{thebibliography}
