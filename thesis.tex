@@ -751,8 +751,13 @@ edge cases, synchronization and accounting have been removed for clarity.
 
 \begin{code}
 \begin{minted}[fontsize=\small]{c}
+/*
+ * Create a vmspace for the child process given the vmspace of the
+ * parent process. Entries inside parent's the vm_map are passed
+ * down to the child according to the VM_INHERIT_* flags.
+ */
 struct vmspace *
-vmspace_fork(struct vmspace *vm1, vm_ooffset_t *fork_charge)
+vmspace_fork(struct vmspace *vm1)
 {
     struct vmspace *vm2;
     vm_map_t new_map, old_map;
@@ -760,7 +765,10 @@ vmspace_fork(struct vmspace *vm1, vm_ooffset_t *fork_charge)
     vm_object_t object;
 
     old_map = &vm1->vm_map;
-    /* Allocate a new vmspace structure with the given address range */
+    /*
+     * Allocate a new vmspace structure with the same address range
+     * as the parent's vmspace
+     */
     vm2 = vmspace_alloc(old_map->min_offset, old_map->max_offset, NULL);
     /* Copy immutable fields of vm1 to vm2. */
     vm2->vm_taddr = vm1->vm_taddr;
@@ -769,9 +777,13 @@ vmspace_fork(struct vmspace *vm1, vm_ooffset_t *fork_charge)
     new_map = &vm2->vm_map;
     old_entry = old_map->header.next;
 
-    /* Iterate over all entries in old_map */
+    /* Iterate over all entries in parent's vm_map */
     while (old_entry != &old_map->header) {
 
+        /*
+         * The inheritance field determines whether and how
+         * the entry is inherited by the child vm_map.
+         */
         switch (old_entry->inheritance) {
         case VM_INHERIT_NONE:
             /* Don't clone the entry to new_map */
@@ -784,7 +796,8 @@ vmspace_fork(struct vmspace *vm1, vm_ooffset_t *fork_charge)
              */
 
             /*
-             * The object may not have been created.
+             * Anonymous vm_objects are created lazily as an optimization,
+             * so the object may not have been created yet.
              * Create it if that's the case.
              */
             object = old_entry->object.vm_object;
@@ -795,11 +808,6 @@ vmspace_fork(struct vmspace *vm1, vm_ooffset_t *fork_charge)
                 old_entry->offset = 0;
             }
 
-            /*
-             * Add the reference before calling vm_object_shadow
-             * to insure that a shadow object is created.
-             */
-            vm_object_reference(object);
             if (old_entry->eflags & MAP_ENTRY_NEEDS_COPY) {
                 /*
                  * old_entry is a copy-on-write entry and its shadow
@@ -818,16 +826,12 @@ vmspace_fork(struct vmspace *vm1, vm_ooffset_t *fork_charge)
                     old_entry->end - old_entry->start);
                 old_entry->eflags &= ~MAP_ENTRY_NEEDS_COPY;
 
-                /* Transfer the second reference too. */
-                vm_object_reference(
-                    old_entry->object.vm_object);
-
                 /*
-                 * Now, instead of both the parent and child entries
-                 * referencing object, only the shadow object references
-                 * it, therefore we decrement the reference counter.
+                 * Add a reference to the newly created shadow object,
+                 * bringing its reference count to 2 (parent + child).
                  */
-                vm_object_deallocate(object);
+                vm_object_reference(old_entry->object.vm_object);
+
                 object = old_entry->object.vm_object;
             }
 
@@ -841,8 +845,8 @@ vmspace_fork(struct vmspace *vm1, vm_ooffset_t *fork_charge)
              * Insert the entry into the new map -- we know we're
              * inserting at the end of the new map.
              */
-            vm_map_entry_link(new_map, new_map->header.prev,
-                new_entry);
+            vm_map_entry_link(new_map, new_map->header.prev, new_entry);
+
             /*
              * Do some bookkeeping associated with the sizes of
              * the text, data and stack segments.
@@ -869,6 +873,7 @@ vmspace_fork(struct vmspace *vm1, vm_ooffset_t *fork_charge)
             vm_map_entry_link(new_map, new_map->header.prev,
                 new_entry);
             vmspace_map_entry_forked(vm1, vm2, new_entry);
+
             /*
              * Make old_entry and new_entry point to the same vm_object.
              * Both entries are marked copy-on-write so that the initial
@@ -876,8 +881,7 @@ vmspace_fork(struct vmspace *vm1, vm_ooffset_t *fork_charge)
              * parent and the child processes, but changes made by one
              * are not visible to the other.
              */
-            vm_map_copy_entry(old_map, new_map, old_entry,
-                new_entry, fork_charge);
+            vm_map_copy_entry(old_map, new_map, old_entry, new_entry);
             break;
 
         case VM_INHERIT_ZERO:
@@ -897,8 +901,10 @@ vmspace_fork(struct vmspace *vm1, vm_ooffset_t *fork_charge)
             new_entry->max_protection = old_entry->max_protection;
             new_entry->inheritance = VM_INHERIT_ZERO;
 
+            /* Add new entry to the map. */
             vm_map_entry_link(new_map, new_map->header.prev,
                 new_entry);
+            /* Bookkeeping */
             vmspace_map_entry_forked(vm1, vm2, new_entry);
 
 
@@ -1019,10 +1025,18 @@ essence has been distilled in the code listing below.
 
 \begin{listing}[H]
 \begin{minted}[fontsize=\small]{c}
+/*
+ * Map a segment from an ELF executable into an address space.
+ * map - vm_map into which the segment should be mapped
+ * object - vm_object for the executable
+ * offset - offset of the start of the segment within the executable
+ * start/end - start/end virtual address of the segment
+ * prot - protection attributes with which the segment should be mapped
+ * cow - copy-on-write attributes
+ */
 static int
-elf64_map_insert(struct image_params *imgp, vm_map_t map, vm_object_t object,
-    vm_ooffset_t offset, vm_offset_t start, vm_offset_t end, vm_prot_t prot,
-    int cow)
+elf64_map_insert(vm_map_t map, vm_object_t object, vm_ooffset_t offset,
+    vm_offset_t start, vm_offset_t end, vm_prot_t prot, int cow)
 {
     struct sf_buf *sf;
     vm_offset_t off;
@@ -1042,7 +1056,9 @@ elf64_map_insert(struct image_params *imgp, vm_map_t map, vm_object_t object,
     if ((offset & PAGE_MASK) != 0) {
         /*
          * Another edge case: (offset % PAGE_SIZE) != (start % PAGE_SIZE)
-         * This means that we have to copy the data.
+         * This means that we have to copy the data into a fresh set of
+         * pages of anonymous memory instead of mapping the executable
+         * vm_object.
          */
          /* ... */
     } else {
@@ -1086,9 +1102,18 @@ shows the algorithm in more detail.
 
 \begin{code}
 \begin{minted}[fontsize=\small]{c}
+/*
+ * Handle a page fault by finding the needed page and mapping it
+ * into the faulting process's address space.
+ * map - vm_map of the faulting process
+ * vaddr - virtual address that the process tried to access and
+ * triggered the fault
+ * fault_type - what kind of access was attempted (read/write), and
+ * also what the cause for calling the function is (it's not only used
+ * for handling page faults)
+ */
 int
-vm_fault_hold(vm_map_t map, vm_offset_t vaddr, vm_prot_t fault_type,
-    int fault_flags, vm_page_t *m_hold)
+vm_fault_hold(vm_map_t map, vm_offset_t vaddr, vm_prot_t fault_type)
 {
     /*
      * The faultstate structure records the parts of the
@@ -1123,31 +1148,24 @@ RetryFault:;
 
     /*
      * Set the initial (object, offset) pair that will be used
-     * to query objects for the page we're looking for
+     * to query objects for the page we're looking for.
      */
     fs.object = fs.first_object;
     fs.pindex = fs.first_pindex;
     while (TRUE) {
 
-        /*
-         * See if page is resident
-         */
+        /* See if page is resident. */
         fs.m = vm_page_lookup(fs.object, fs.pindex);
         if (fs.m != NULL) {
-            /*
-             * Block and retry if the page is busy.
-             */
+            /* Block and retry if the page is busy. */
             if (vm_page_busied(fs.m)) {
-                if (fs.m == vm_page_lookup(fs.object,
-                    fs.pindex)) {
-                    vm_page_sleep_if_busy(fs.m, "vmpfw");
+                if (fs.m == vm_page_lookup(fs.object, fs.pindex)) {
+                    vm_page_sleep_if_busy(fs.m);
                 }
                 goto RetryFault;
             }
 
-            /*
-             * Mark page busy for other processes.
-             */
+            /* Mark page busy for other processes. */
             vm_page_xbusy(fs.m);
             /* We found the page to be copied to fs.m */
             break; /* Break to PAGE HAS BEEN FOUND. */
@@ -1162,11 +1180,8 @@ RetryFault:;
         if (fs.object->type != OBJT_DEFAULT ||
             fs.object == fs.first_object) {
 
-            /*
-             * Allocate a new page for this object/offset pair.
-             */
-            fs.m = vm_page_alloc(fs.object, fs.pindex,
-                alloc_req);
+            /* Allocate a new page inside the object. */
+            fs.m = vm_page_alloc(fs.object, fs.pindex);
             if (fs.m == NULL) {
                 /* No pages available. Block and retry. */
                 vm_waitpfault();
@@ -1182,10 +1197,10 @@ RetryFault:;
         if (fs.object->type != OBJT_DEFAULT) {
 
             /*
-             * Calculate how many surrounding pages we should ask the
-             * pager for, determining the values of ahead and behind.
+             * (omitted) Calculate how many surrounding pages we should
+             * ask the pager for, determining the values of ahead and
+             * behind.
              */
-
 
             /* Get the pages */
             rv = vm_pager_get_pages(fs.object, &fs.m, 1,
@@ -1257,10 +1272,7 @@ RetryFault:;
         fs.object = next_object;
     }
 
-    /*
-     * PAGE HAS BEEN FOUND. [Loop invariant still holds -- the object lock
-     * is held.]
-     */
+    /* PAGE HAS BEEN FOUND. */
 
     /*
      * If the page is being written, but isn't already owned by the
@@ -1276,9 +1288,7 @@ RetryFault:;
             fs.first_m->valid = VM_PAGE_BITS_ALL;
             /* We no longer need the old page or object. */
             release_page(&fs);
-            /*
-             * Only use the new page below...
-             */
+            /* Only use the new page below... */
             fs.object = fs.first_object;
             fs.pindex = fs.first_pindex;
             fs.m = fs.first_m;
@@ -1306,6 +1316,18 @@ The \mintinline{c}{kern_mmap} function implements the whole system call.
 
 \begin{code}
 \begin{minted}[fontsize=\small]{c}
+/*
+ * Add a new mapping to a thread's address space.
+ * td - thread that called mmap
+ * addr - virtual address where the mapping should begin
+ * size - size of the mapping
+ * prot - desired protection attributes of the mapping
+ * flags - flags describing the kind of mapping
+ * fd - file descriptor pointing to the file that will provide
+ * the contents of the mapping
+ * pos - position within the file where the contents of the
+ * mapping begin
+*/
 int
 kern_mmap(struct thread *td, uintptr_t addr, size_t size, int prot, int flags,
     int fd, off_t pos)
@@ -1322,6 +1344,10 @@ kern_mmap(struct thread *td, uintptr_t addr, size_t size, int prot, int flags,
     fp = NULL;
 
     if (flags & MAP_STACK) {
+        /*
+         * Stacks are not backed by any file, so we map them
+         * anonymously.
+         */
         flags |= MAP_ANON;
         pos = 0;
     }
@@ -1339,6 +1365,11 @@ kern_mmap(struct thread *td, uintptr_t addr, size_t size, int prot, int flags,
 
     /* Check for illegal addresses. */
     if (flags & MAP_FIXED) {
+        /*
+         * MAP_FIXED means the mapping must begin at the
+         * address supplied by the user.
+         */
+
         /*
          * The specified address must have the same remainder
          * as the file offset taken modulo PAGE_SIZE, so it
@@ -1414,12 +1445,24 @@ sanity checks, after which it calls \mintinline{c}{vm_map_find_min} or
 
 \begin{code}
 \begin{minted}[fontsize=\small]{c}
+/*
+ * Map a fragment of a vm_object into the given vm_map.
+ * map - vm_map into which the object should be mapped
+ * addr - pointer to the virtual address at which the
+ * mapping should start
+ * prot - protection attributes of the mapping
+ * maxprot - maximum allowable protection attributes of the mapping
+ * object - vm_object whose pages should be mapped
+ * foff - offset into the object where the contents of the
+ * mapping start
+ * td - thread that called mmap
+ */
 int
 vm_mmap_object(vm_map_t map, vm_offset_t *addr, vm_size_t size, vm_prot_t prot,
     vm_prot_t maxprot, int flags, vm_object_t object, vm_ooffset_t foff,
-    boolean_t writecounted, struct thread *td)
+    struct thread *td)
 {
-    boolean_t fitit;
+    boolean_t fitit; /* FALSE if *addr is just a hint */
     vm_offset_t max_addr;
     int docow, findspace, rv;
 
@@ -1436,26 +1479,10 @@ vm_mmap_object(vm_map_t map, vm_offset_t *addr, vm_size_t size, vm_prot_t prot,
         fitit = FALSE;
     }
 
-    /* Various flag conversions */
-    if (flags & MAP_ANON) {
-        docow = 0;
-    } else if (flags & MAP_PREFAULT_READ)
-        docow = MAP_PREFAULT;
-    else
-        docow = MAP_PREFAULT_PARTIAL;
-
-    if ((flags & (MAP_ANON|MAP_SHARED)) == 0)
-        docow |= MAP_COPY_ON_WRITE;
-    /* Shared memory is also shared with children. */
-    if (flags & MAP_SHARED)
-        docow |= MAP_INHERIT_SHARE;
-    if (flags & MAP_STACK) {
-        if (object != NULL)
-            return (EINVAL);
-        docow |= MAP_STACK_GROWS_DOWN;
-    }
-    if ((flags & MAP_GUARD) != 0)
-        docow |= MAP_CREATE_GUARD;
+    /*
+     * (omitted) Perform various flag conversions, determining
+     * the values of the docow and flags variables.
+     */
 
     if (fitit) {
         /*
@@ -1463,14 +1490,10 @@ vm_mmap_object(vm_map_t map, vm_offset_t *addr, vm_size_t size, vm_prot_t prot,
          * of the allocated entry may be different.
          */
 
-        /* Convert alignment flags. */
-        if ((flags & MAP_ALIGNMENT_MASK) == MAP_ALIGNED_SUPER)
-            findspace = VMFS_SUPER_SPACE;
-        else if ((flags & MAP_ALIGNMENT_MASK) != 0)
-            findspace = VMFS_ALIGNED_SPACE(flags >>
-                MAP_ALIGNMENT_SHIFT);
-        else
-            findspace = VMFS_OPTIMAL_SPACE;
+        /*
+         * (omitted) Convert alignment flags, determining the
+         * value of findspace.
+         */
 
         max_addr = 0; /* Means there's no maximum. */
 
