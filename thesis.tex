@@ -16,29 +16,33 @@
 
 %%%%% DANE DO STRONY TYTUŁOWEJ
 % Niezaleznie od jezyka pracy wybranego w opcjach klasy, tytul i streszczenie
-% pracy nalezy podac zarowno w jezyku polskim, jak i angielskim.
-% Pamietaj o madrym (zgodnym z logicznym rozbiorem zdania oraz estetyka) recznym
-% zlamaniu wierszy w temacie pracy, zwlaszcza tego w jezyku pracy. Uzyj do tego
-% polecenia \fmlinebreak.
+% pracy nalezy podac zarowno w jezyku polskim, jak i angielskim. Pamietaj o
+% madrym (zgodnym z logicznym rozbiorem zdania oraz estetyka) recznym zlamaniu
+% wierszy w temacie pracy, zwlaszcza tego w jezyku pracy. Uzyj do tego polecenia
+% \fmlinebreak.
 \polishtitle {Inicjalizacja i zarządzanie \fmlinebreak pamięcią wirtualną
   \fmlinebreak w systemie operacyjnym FreeBSD}
 
 \englishtitle {Virtual Memory \fmlinebreak Initialization and Management
   \fmlinebreak in the FreeBSD Operating System}
 
-\polishabstract {
-  Pamięć wirtualna jest jedną z najważniejszych abstrakcji udostępnianych
-  programom użytkownika przez jądra nowoczesnych systemów operacyjnych.
-  Znacznie upraszcza ona budowanie aplikacji, jednak efektywna jej implementacja
-  stanowi duże wyzwanie. Jądro systemu operacyjnego FreeBSD jest przykładem
-  efektywnej implementacji pamięci wirtualnej. Niestety, osiągnięcie dobrej
-  wydajności wymaga zastosowania złożonych struktur danych i algorytmów, co
-  sprawia że osobom niezaznajomionym z jądrem trudno jest zrozumieć działanie
-  podsystemu pamięci wirtualnej. \ldots
+\polishabstract { Pamięć wirtualna jest jedną z najważniejszych abstrakcji
+  udostępnianych programom użytkownika przez jądra nowoczesnych systemów
+  operacyjnych. Znacznie upraszcza ona budowanie aplikacji, jednak efektywna jej
+  implementacja stanowi duże wyzwanie. Przykładem efektywnej implementacji jest
+  podsystem pamięci wirtualnej jądra systemu operacyjnego FreeBSD. Niestety,
+  osiągnięcie dobrej wydajności wymaga zastosowania złożonych struktur danych i
+  algorytmów, co sprawia, że osobom niezaznajomionym z jądrem trudno jest
+  zrozumieć działanie podsystemu pamięci wirtualnej. Poniższa praca stanowi
+  przegląd architektury podsystemu pamięci wirtualnej jądra FreeBSD.
+  Implementacja najważniejszych funkcji przedstawiona jest w postaci
+  uproszczonych fragmentów prawdziwego kodu źródłowego wykorzystywanego w
+  jądrze. Następnie przedstawiony jest proces inicjalizacji części podsystemu
+  pamięci wirtualnej zależnej od architektury na przykłądzie architektury x86.
+  Praca ta służy też jako wprowadzenie do czytania kodu źródłowego jądra.
 }
 
-\englishabstract {
-  Virtual memory is one of the most important abstractions
+\englishabstract { Virtual memory is one of the most important abstractions
   provided to user space programs by modern operating system kernels. While it
   greatly simplifies application development, implementing it efficiently is a
   great challenge. The FreeBSD operating system kernel VM (Virtual Memory)
@@ -47,33 +51,31 @@
   to the kernel. This thesis provides an overview of the architecture of the
   FreeBSD VM subsystem, along with fragments of real-world (albeit simplified)
   source code that implement its most important functions. Subsequently, it goes
-  through the initialization of the VM subsystem on the x86 architecture. It
-  also acts as a guide to reading the kernel's source code.
-}
+  through the machine-dependent initialization of the VM subsystem on the x86
+  architecture. It also acts as a guide to reading the kernel's source code. }
 % w pracach wielu autorow nazwiska mozna oddzielic poleceniem \and
-\author         {Jakub Piecuch}
-% w przypadku kilku promotorow, lub koniecznosci podania ich afiliacji, linie
-% w ponizszym poleceniu mozna zlamac poleceniem \fmlinebreak
-\advisor        {dr Piotr Witkowski}
-%\date          {}                     % Data zlozenia pracy
+\author {Jakub Piecuch}
+% w przypadku kilku promotorow, lub koniecznosci podania ich afiliacji, linie w
+% ponizszym poleceniu mozna zlamac poleceniem \fmlinebreak
+\advisor {dr Piotr Witkowski}
+% \date {} % Data zlozenia pracy
 % Dane do oswiadczenia o autorskim wykonaniu
-\transcriptnum {281940}                     % Numer indeksu
-\advisorgen    {dr. Piotra Witkowskiego} % Nazwisko promotora w dopelniaczu
+\transcriptnum {281940} % Numer indeksu
+\advisorgen {dr. Piotra Witkowskiego} % Nazwisko promotora w dopelniaczu
 %%%%%
 
 %%%%% WLASNE DODATKOWE PAKIETY
 %
-%\usepackage{graphicx,listings,amsmath,amssymb,amsthm,amsfonts,tikz}
+% \usepackage{graphicx,listings,amsmath,amssymb,amsthm,amsfonts,tikz}
 \usepackage{amsfonts}
 %
 %%%%% WŁASNE DEFINICJE I POLECENIA
 %
-%\theoremstyle{definition} \newtheorem{definition}{Definition}[chapter]
-%\theoremstyle{remark} \newtheorem{remark}[definition]{Observation}
-%\theoremstyle{plain} \newtheorem{theorem}[definition]{Theorem}
-%\theoremstyle{plain} \newtheorem{lemma}[definition]{Lemma}
-%\renewcommand \qedsymbol {\ensuremath{\square}}
-% ...
+% \theoremstyle{definition} \newtheorem{definition}{Definition}[chapter]
+% \theoremstyle{remark} \newtheorem{remark}[definition]{Observation}
+% \theoremstyle{plain} \newtheorem{theorem}[definition]{Theorem}
+% \theoremstyle{plain} \newtheorem{lemma}[definition]{Lemma} \renewcommand
+% \qedsymbol {\ensuremath{\square}} ...
 %%%%%
 
 \input macros
@@ -107,7 +109,7 @@
   b. pracochłonne, być nie we wszystkich ale w niektórych miejscach
   warto to zrobić)}
 
-\section{What is virtual memory?}
+\section{What is virtual memory?} \label{section:whatisvm}
 
 A system implementing virtual memory provides every process in the system with
 an address space of its own, its \textbf{Virtual Address Space} (VAS). The
@@ -122,12 +124,12 @@ $2^{48}$ bytes, that is 256 TiB (tebibytes)\footnote{
   1 TiB = 1024 GiB (gibibytes). A gibibyte is slightly larger than a gigabyte. \\
   See \url{https://en.wikipedia.org/wiki/Binary_prefix}.}.
 
-The VAS of any process contains the whole \textbf{process image}, that is the
-instructions, data and the run-time stack. A process in execution accesses
-memory to fetch its instructions, as well as to read and write data. All
-instructions executed by the process access memory using \textbf{Virtual
-  Addresses} (VAs), which are integers in the range from 0 to $N-1$, where $N$
-is the VAS size.
+The VAS of any process contains the whole \textbf{process image} (also called
+the \textbf{core image}), that is the instructions, data and the run-time stack.
+A process in execution accesses memory to fetch its instructions, as well as to
+read and write data. All instructions executed by the process access memory
+using \textbf{Virtual Addresses} (VAs), which are integers in the range from 0
+to $N-1$, where $N$ is the VAS size.
 
 Since the VAS size can be larger than the amount of available physical memory,
 there cannot be a 1-to-1 correspondence between VAs and \textbf{Physical
@@ -141,11 +143,15 @@ form of a \textbf{Memory Management Unit} (MMU). The MMU translates VAs
 generated by the program into PAs used to address the physical memory. As the
 details are architecture-specific, this thesis focuses on the x86 architecture.
 
-In the x86 architecture, the mapping between VAs and PAs is determined by an
-in-memory data structure called a \textbf{Page Table} (PT). The VAS is divided
-into units called \textbf{pages}. Their size is usually 4 KiB. Likewise, the
-physical memory is divided into page-sized units called \textbf{page frames}.
-The Page Table describes the mapping between pages and page frames, instead of
+In the x86 architecture, the translation from VAs to PAs can be done using two
+schemes: \textbf{segmentation} and \textbf{paging}. Since paging is rarely used
+in today's operating systems, we will focus the discussion on paging. In a
+paging scheme, the mapping between VAs and PAs is determined by an in-memory
+data structure called a \textbf{Page Table} (PT). The VAS is divided into units
+called \textbf{pages}. Their size is usually 4 KiB. Likewise, the physical
+memory is divided into page-sized units called \textbf{page frames}. Pages are
+commonly called virtual pages, and page frames are called physical pages. The
+Page Table describes the mapping between pages and page frames, instead of
 between individual virtual addresses and physical addresses. This significantly
 reduces the size of the Page Table.
 
@@ -167,11 +173,11 @@ An important observation is that with virtual memory, processes can be partially
 in physical memory). Unused pages can be unmapped, as an exception will
 generated only when a process references the page. Furthermore, even pages that
 are used by a process don't have to be resident at all times, as the OS can map
-them into the VAS in response to a page fault, and then restart the
-instruction that caused it. This strategy is called \textbf{demand paging} and
-is widely used. It enables the system to use memory resources efficiently
-by holding only as many mapped pages in physical memory as are necessary for
-any one process to run smoothly.
+them into the VAS in response to a page fault, and then restart the instruction
+that caused it. This strategy is called \textbf{demand paging} and is widely
+used. It enables the system to use memory resources efficiently by holding only
+as many mapped pages in physical memory as are necessary for any one process to
+run smoothly.
 
 In summary, virtual memory has the following important characteristics:
 \begin{itemize}
@@ -185,10 +191,11 @@ In summary, virtual memory has the following important characteristics:
 
 \section{The FreeBSD Operating System}
 
-FreeBSD is an open-source operating system, first released in 1993. It is the
-most popular OS in the BSD family of Operating Systems, which includes FreeBSD,
-NetBSD, OpenBSD and DragonFlyBSD. Unlike Linux, FreeBSD is a whole Operating
-System, providing the kernel, drivers and a suite of utility programs.
+FreeBSD \cite{bib:freebsd} is an open-source operating system, first released in
+1993. It is the most popular OS in the BSD family of operating systems, which
+includes FreeBSD, NetBSD, OpenBSD and DragonFlyBSD. Unlike Linux, FreeBSD is a
+whole operating system, providing the kernel, drivers and a suite of utility
+programs.
 
 It is released under a permissive BSD license, which makes it an attractive
 choice for commercial applications. FreeBSD has been used as the basis for
@@ -209,10 +216,10 @@ kernel with support for identifier search:
 
 The author recommends \ref{fxr}, as it allows the user to select any major
 version of the source tree, while \ref{bxr} only presents the latest revision.
-This is especially relevant since all source code discussion and listings apply
-specifically to the \texttt{11-STABLE} version of the kernel. On the other hand,
-\ref{bxr} has a more aesthetically pleasing interface, which includes syntax
-highlighting.
+On the other hand, \ref{bxr} has a more aesthetically pleasing interface, which
+includes syntax highlighting. All source code discussion and listings apply
+specifically to the \texttt{12-CURRENT} branch of the kernel, which is the
+latest revision and is still under development as of september 2018.
 
 The kernel source code can be found in the \texttt{/sys} directory of the tree.
 Since other parts of the tree are not going to be discussed, all subsequent
@@ -229,7 +236,12 @@ architecture. This is quite confusing, since the kernel source tree contains a
 directory named \texttt{x86} -- this directory contains architecture-specific
 code that is shared between the AMD64 and x86 architectures.
 
-\chapter{An overview of the FreeBSD VM subsystem}
+\subsection{Bibliographic notes}
+A more detailed explanation of the concepts introduced in \ref{section:whatisvm}
+can be found in \cite[Section~3.3]{bib:tanenbaum}. For a description of paging
+on the x86 architecture, see \cite[Chapter~4]{bib:intel}.
+
+\chapter{An Overview of the FreeBSD VM Subsystem}
 
 The goal of this chapter is to describe the data structures used for managing
 virtual memory in the FreeBSD Operating System. For each one, a brief high-level
@@ -281,7 +293,6 @@ struct vm_map {
     vm_flags_t flags;           /* Flags for this vm_map */
     vm_map_entry_t root;        /* Root of a binary search tree */
     pmap_t pmap;                /* Pointer to physical map */
-    int busy;
 };
 \end{minted}
 \caption{\texttt{vm/vm\_map.h}: Definition of \mintinline{c}{struct vm_map}}
@@ -321,15 +332,6 @@ fault handling by taking advantage of the spatial locality of page faults (i.e.
 when a page fault happens, the next one is likely to happen at an address close
 to the previous one).
 
-\subsection*{\mintinline{c}{int busy;}}
-The \mintinline{c}{busy} field is an integer counter that is incremented whenever a
-thread is in the middle of performing an operation on the \mintinline{c}{vm_map} and
-has to release the lock for some reason, e.g. to wait for some event to occur.
-This signalizes to other threads that some other thread is relying on the map
-being in the same state as it was before it relased the lock. Thus, effectively,
-when the value of the counter is greater than 0, modifications to the
-\mintinline{c}{vm_map} are forbidden.
-
 \section{\mintinline{c}{vm_map_entry}}
 
 The \mintinline{c}{vm_map_entry} structure describes a contiguous, page-aligned
@@ -356,10 +358,7 @@ struct vm_map_entry {
    vm_prot_t protection;       /* Protection code */
    vm_prot_t max_protection;   /* Maximum protection */
    vm_inherit_t inheritance;   /* Inheritance */
-   uint8_t read_ahead;         /* Pages in the read-ahead window */
-   int wired_count;            /* can be paged if = 0 */
-   struct ucred *cred;         /* tmp storage for creator ref */
-   struct thread *wiring_thread;
+   int wired_count;            /* How many pages in the map are wired? */
 };
 \end{minted}
 \caption{\texttt{vm/vm\_map.h}: Definition of \mintinline{c}{struct vm_map}}
@@ -404,13 +403,13 @@ within the object.
 \mintinline{c}{eflags} contains various flags, some notable of which are:
 \begin{itemize}
 \item \mintinline{c}{MAP_ENTRY_COW}: indicates that the entry is a
-  \textbf{copy-on-write} entry, which means that initially all pages are marked
-  read-only. As soon as the process attempts to write to a page in the enty, the
-  kernel will copy the faulting page to a new page and map the new page into the
-  address space of the process, this time with the write bit set. This avoids
-  unnecessary copying of pages when a process forks or requests a private
-  mapping of a file (i.e. a mapping such that changes to it aren't reflected in
-  the file).
+  \textbf{copy-on-write} entry \cite[Page~90]{bib:tanenbaum}, which means that
+  initially all pages are marked read-only. As soon as the process attempts to
+  write to a page in the entry, the kernel will copy the faulting page to a new
+  page and map the new page into the address space of the process, this time
+  with the write bit set. This avoids unnecessary copying of pages when a
+  process forks or requests a private mapping of a file (i.e. a mapping such
+  that changes to it aren't reflected in the file).
 \item \mintinline{c}{MAP_BEHAV_{NORMAL, SEQUENTIAL, RANDOM}}: these flags
   specify the access pattern that is to be expected from the process. The
   default is \mintinline{c}{MAP_BEHAV_NORMAL}, which makes the kernel detect
@@ -443,19 +442,20 @@ process forks. The possible behaviours are:
 
 A \mintinline{c}{vm_object} contains a \mintinline{c}{vm_map_entry}'s resident
 pages. Multiple entries belonging to different processes can have the same
-backing object, allowing for fast interprocess communication through shared memory.
+backing object, allowing for fast interprocess communication through shared
+memory.
 
-Copy-on-write is implemented in BSD using special \textbf{shadow objects}. These
-objects have backing objects themselves, and hence can form chains ending in a
-non-shadow object. Shadow objects hold pages copied as a result of a
-copy-on-write fault.
+Copy-on-write is implemented in BSD using special \textbf{shadow objects}
+\cite[Page~304]{bib:mckusick14}. These objects have backing objects themselves,
+and hence can form chains ending in a non-shadow object. Shadow objects hold
+pages copied as a result of a copy-on-write fault.
 
 Since \mintinline{c}{vm_object}s are only containers for resident pages, and not
 all pages are always resident, there must be some other component responsible
 for providing the contents of the pages. This is the job of a \textbf{pager}
-structure contained within the object. It provides the abstraction of a backing
-store from which pages can be filled with contents, and to which pages can be
-written back in case of memory shortage.
+\cite[Section~6.10]{bib:mckusick14} structure contained within the object. It
+provides the abstraction of a backing store from which pages can be filled with
+contents, and to which pages can be written back in case of memory shortage.
 
 \begin{listing}[H]
 \begin{minted}{c}
@@ -495,11 +495,11 @@ struct vm_object {
 
 \subsection*{\mintinline{c}{vm_memattr_t memattr;}}
 
-\mintinline{c}{memattr} specifies the default cache behaviour of pages belonging
+\mintinline{c}{memattr} specifies the default cache behaviour \cite[Section~11.3]{bib:intel} of pages belonging
 to the object. For example, contents of pages with the
 \mintinline{c}{VM_MEMATTR_UNCACHEABLE} attribute cannot be cached and all read
-and write requests have to go directly to the physical memory. This attribute is used
-primarily for pages representing memory mapped devices, e.g. frame buffers.
+and write requests have to go directly to the physical memory. This attribute is
+used primarily for pages representing memory mapped devices, e.g. frame buffers.
 
 \subsection*{\mintinline{c}{objtype_t type;}}
 
@@ -625,7 +625,9 @@ page table and page table entries to have a specific layout. This layout is
 exactly what is implemented in the x86 version of the \mintinline{c}{pmap}
 structure.
 
-\subsection{x86 page table layout}
+\subsection{x86 Page Table Layout}
+
+For a detailed description of the layout, see \cite[Section~4.2]{bib:intel}.
 
 Logically, the page table is an array of 4-byte \textbf{Page Table Entries}
 (PTEs). The virtual address used to access memory is split into a
@@ -697,7 +699,7 @@ struct pmap {
 \end{listing}
 
 
-\chapter{Virtual Memory management}
+\chapter{Virtual Memory Management}
 
 In this chapter we take a look at the inner workings of the most important
 functions carried out by the operating system when it comes to managing a
@@ -707,16 +709,17 @@ during the lifetime of a process.
 
 The first function we will discuss is the creation of a new address space. A new
 virtual address space is created whenever a new process enters the system. All
-processes in FreeBSD are created using a mechanism called \textbf{forking}. When
-a process forks, an almost identical copy of it is created by the kernel. The
-copy is called the \textbf{child}, and the forking process is called the
-\textbf{parent}. The layout of the child's virtual address space is identical to
-the one of its parent.
+processes in FreeBSD are created using a mechanism called \textbf{forking}
+\cite[Section~1.6.1]{bib:tanenbaum}. When a process forks, an almost identical
+copy of it is created by the kernel. The copy is called the \textbf{child}, and
+the forking process is called the \textbf{parent}. The layout of the child's
+virtual address space is identical to the one of its parent.
 
 Usually, new processes are created in order to run some executable program
-stored in a file. To do that, a process invokes the \texttt{execve} system call.
-The operating system then completely replaces the contents of the process's
-address space with the process image contained in the file.
+stored in a file. To do that, a process invokes the \texttt{execve}
+\cite{freebsd:execve} system call. The operating system then completely replaces
+the contents of the process's address space with the process image contained in
+the file.
 
 Once the program begins to execute, it accesses instructions and data using
 virtual addresses. Some of these accesses will generate \textbf{page faults},
@@ -724,30 +727,31 @@ and the kernel has to handle them appropiately, fetching data from secondary
 storage or terminating the process if it tried to access an unmapped region.
 
 A process can also modify the layout of its own address space. The \texttt{mmap}
-system call allows a process to create a new segment of virtual memory that it
-can access, or overlay an existing one. The initial contents of these segments
-can be provided by a file from the file system or simply filled with zeros.
+\cite{freebsd:mmap} system call allows a process to create a new segment of
+virtual memory that it can access, or overlay an existing one. The initial
+contents of these segments can be provided by a file from the file system or
+simply filled with zeros.
 
 Each section of this chapter will describe the steps taken by the kernel when
 carrying out each of these functions.
 
 \section{Address space creation -- the \texttt{fork} system call}
 
-The \texttt{fork} system call creates an almost identical clone of the calling
+The \texttt{fork} \cite{freebsd:fork} system call creates an almost identical clone of the calling
 process, which includes an address space cloned from the address space of the
 calling process.
 
-The \mintinline{c}{vmspace_fork} is used by the code
-implementing the system call to create a copy of an address space.
-The function takes a pointer to the \mintinline{c}{vmspace} structure of the
-calling process as an argument and returns a pointer to the copy which it has
-created.
+The \mintinline{c}{vmspace_fork} is used by the code implementing the system
+call to create a copy of an address space. The function takes a pointer to the
+\mintinline{c}{vmspace} structure of the calling process as an argument and
+returns a pointer to the copy which it has created.
 
 The code listing below is a simplified version of the actual implementation of
 the \mintinline{c}{vmspace_fork} function. Fragments of code which deal with
 edge cases, synchronization and accounting have been removed for clarity.
 
-\pwit{Poniższy kod wymaga kilku/nastu zdań komentarza. Podobnie pozostały kod w CAŁEJ pracy}
+\pwit{Poniższy kod wymaga kilku/nastu zdań komentarza. Podobnie pozostały kod w
+  CAŁEJ pracy}
 
 \begin{code}
 \begin{minted}[fontsize=\small]{c}
@@ -916,7 +920,8 @@ vmspace_fork(struct vmspace *vm1)
     return (vm2);
 }
 \end{minted}
- \captionof{listing}{\texttt{vm/vm\_map.c}: Simplified implementation of the \mintinline{c}{vmspace_fork} function}
+  \captionof{listing}{\texttt{vm/vm\_map.c}: Simplified implementation of the
+    \mintinline{c}{vmspace_fork} function}
 \end{code}
 
 \section{Executing a new program -- the \texttt{execve} system call}
@@ -936,7 +941,7 @@ space management logic is implemented elsewhere. Hence, we will not the code for
 
 To understand the code responsible for populating an empty address space with a
 program contained in a file, it is helpful to understand the concept of
-\textbf{image activators}.
+\textbf{image activators} \cite[Section~3.5]{bib:mckusick04}.
 
 The kernel supports multiple different file formats that contain an executable
 program. For instance, the file pointed to by the path passed to \texttt{execve}
@@ -1304,7 +1309,8 @@ RetryFault:;
     return (KERN_SUCCESS);
 }
 \end{minted}
-  \captionof{listing}{\texttt{vm/vm\_fault.c}: Simplified implementation of the \mintinline{c}{vm_fault_hold} function}
+  \captionof{listing}{\texttt{vm/vm\_fault.c}: Simplified implementation of the
+    \mintinline{c}{vm_fault_hold} function}
 \end{code}
 
 \section{Adding new mappings - the \texttt{mmap} system call}
@@ -1532,16 +1538,17 @@ Every architecture has a lot of aspects whose specifics differ between different
 architectures, and sometimes even between revisions of the same architecture.
 One example is boot-time initialization of the virtual memory subsystem, which
 includes setting up the initial kernel page table (if any) and reserving memory
-used by low-level components. Of course, we would like as much portable code as
-possible, therefore it is crucial to properly identify machine-dependent aspects
-of system operation and abstract them away behind a common interface.
+used by low-level components. Of course, we would like the operating system to
+have as much portable code as possible, therefore it is crucial to properly
+identify machine-dependent aspects of system operation and abstract them away
+behind a common interface.
 
 When it comes to virtual memory management, the FreeBSD kernel maximizes
 portability by hiding architecture-specific implementation details inside the
-\texttt{pmap} module, which exposes an abstract interface to low-level VM
-initialization page table management. This chapter focuses on the boot-time
-machine-dependent initialization process as implemented in the 32-bit x86
-version of the kernel.
+\texttt{pmap} \cite{freebsd:pmap} module, which exposes an abstract interface to
+low-level VM initialization page table management. This chapter focuses on the
+boot-time machine-dependent initialization process as implemented in the 32-bit
+x86 version of the kernel.
 
 \subsection{Kernel virtual address space layout}
 
@@ -1551,11 +1558,11 @@ kernel mapped into the upper 1GiB, so that switching between executing user and
 kernel code could be less costly in terms of performance.
 
 However, recently discovered security vulnerabilities affecting (among others)
-x86 processors, dubbed ``Meltdown'' and ``Spectre'', allow an unprivileged
-process to read the contents of its entire address space, including possibly
-sensitive information stored in the kernel portion of the address space. To
-mitigate these vulnerabilities, the kernel no longer shares its address space
-with user processes.
+x86 processors, dubbed ``Meltdown'' \cite{bib:meltdown} and ``Spectre''
+\cite{bib:spectre}, allow an unprivileged process to read the contents of its
+entire address space, including possibly sensitive information stored in the
+kernel portion of the address space. To mitigate these vulnerabilities, the
+kernel no longer shares its address space with user processes.
 
 Any user process has at its disposal almost the entire 4GiB of virtual address
 space, and so does the kernel. This comes at a cost of a greater performance
@@ -1591,13 +1598,14 @@ The exact layout of the kernel virtual address space is as follows:
 When the system starts up, the MMU is disabled, so the CPU addresses physical
 memory directly. The first code that is executed by the CPU is the firmware
 found in the motherboard's ROM (Read-Only Memory). That firmware (also called
-the BIOS - Basic Input/Output System) initializes the hardware at the lowest
+the BIOS - Basic Input/Output System) \cite[Section~15.1]{bib:mckusick14} initializes the hardware at the lowest
 level of abstraction and provides the rest of the software with a more abstract
 and uniform interface to the hardware.
 
 The BIOS then finds a device to boot from and loads into memory a program called
-the \textbf{bootloader}. The bootloader's job is to find the file containing the
-kernel image, load it into memory, and transfer control to it.
+the \textbf{bootloader} \cite[Section~15.2]{bib:mckusick14}. The bootloader's
+job is to find the file containing the kernel image, load it into memory, and
+transfer control to it.
 
 Once the kernel code starts running, the CPU is still addressing physical memory
 directly. The kernel's entry point on the x86 architecture can be found in the
@@ -1734,14 +1742,14 @@ pmap_cold(void)
     the \mintinline{c}{pmap_cold} function}
 \end{code}
 
-After calling \mintinline{c}{pmap_cold}, the \mintinline{c}{init386} procedure is
-called to perform most of machine-dependent initialization of the whole system.
-Only a small part of the procedure is concerned with initializing the VM
+After calling \mintinline{c}{pmap_cold}, the \mintinline{c}{init386} procedure
+is called to perform most of machine-dependent initialization of the whole
+system. Only a small part of the procedure is concerned with initializing the VM
 subsystem. The \mintinline{c}{getmemsize} function is called to detect available
 segments of physical memory, as well as test it by writing and reading back bit
-patterns from every page of physical memory (other than the ones containing the kernel).
-In order to be able to do that, pieces of kernel address space have to be
-reserved, for instance to temporarily map the physical page being tested.
+patterns from every page of physical memory (other than the ones containing the
+kernel). In order to be able to do that, pieces of kernel address space have to
+be reserved, for instance to temporarily map the physical page being tested.
 This is done in the \mintinline{c}{pmap_bootstrap} procedure, which is called
 from \mintinline{c}{getmemsize}. Its simplified code is presented below
 
@@ -1913,8 +1921,49 @@ pmap_init(void)
     the \mintinline{c}{pmap_init} function}
 \end{code}
 
-% \begin{thebibliography}{1}
-% \bibitem{example} \ldots
-% \end{thebibliography}
+\begin{thebibliography}{99}
+
+\bibitem{bib:tanenbaum} Andrew S. Tanenbaum and Herbert Bos. 2014.
+  \textit{Modern Operating Systems} (4th ed.). Prentice Hall Press, Upper Saddle
+  River, NJ, USA.
+
+\bibitem{bib:freebsd} Main Page of the FreeBSD project:
+  \url{https://www.freebsd.org/} (accessed 30/08/2018)
+
+\bibitem{bib:intel} \textit{Intel® 64 and IA-32 Architectures Software
+    Developer’s Manual, Volume 3: System Programming Guide}, available at
+  \url{https://software.intel.com/en-us/articles/intel-sdm} (accessed
+  30/08/2018)
+
+\bibitem{bib:mckusick14} Marshall Kirk McKusick, George Neville-Neil, and Robert
+  N.M. Watson. 2014. \textit{The Design and Implementation of the FreeBSD
+    Operating System} (2nd ed.). Addison-Wesley Professional.
+\bibitem{bib:mckusick04} Marshall Kirk McKusick and George V. Neville-Neil.
+  2004. \textit{The Design and Implementation of the FreeBSD Operating System}
+  (1st ed.). Pearson Education.
+
+\bibitem{bib:meltdown} Moritz Lipp, Michael Schwarz, Daniel Gruss, Thomas
+  Prescher, Werner Haas, Stefan Mangard, Paul Kocher, Daniel Genkin, Yuval Yarom
+  and Michael Hamburg. 2018. \textit{Meltdown}. \url{https://meltdownattack.com}
+  (accessed 30/08/2018)
+
+\bibitem{bib:spectre} Paul Kocher, Daniel Genkin, Daniel Gruss, Werner Haas,
+  Michael Hamburg, Moritz Lipp, Stefan Mangard, Thomas Prescher, Michael Schwarz
+  and Yuval Yarom. 2018. \textit{Spectre Attacks: Exploiting Speculative
+    Execution}. \url{https://meltdownattack.com} (accessed 30/08/2018)
+
+\bibitem{freebsd:execve} \textit{FreeBSD Manual Pages}, \texttt{execve(2)},
+  \url{https://www.freebsd.org/cgi/man.cgi?query=execve} (accessed 30/08/2018)
+
+\bibitem{freebsd:mmap} \textit{FreeBSD Manual Pages}, \texttt{mmap(2)},
+  \url{https://www.freebsd.org/cgi/man.cgi?query=mmap} (accessed 30/08/2018)
+
+\bibitem{freebsd:fork} \textit{FreeBSD Manual Pages}, \texttt{fork(2)},
+  \url{https://www.freebsd.org/cgi/man.cgi?query=fork} (accessed 30/08/2018)
+
+\bibitem{freebsd:pmap} \textit{FreeBSD Manual Pages}, \texttt{pmap(9)},
+  \url{https://www.freebsd.org/cgi/man.cgi?query=pmap} (accessed 30/08/2018)
+
+\end{thebibliography}
 
 \end{document}
