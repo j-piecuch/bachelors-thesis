@@ -83,31 +83,7 @@
 
 %%%%% POCZĄTEK ZASADNICZEGO TEKSTU PRACY
 
-
-\chapter*{Przykłady komentarzy do tekstu}
-
-\pwit{Komentarz w treści} \pwitside{Komentarz na boku}
-\cahir{Komentarz w treści} \cahirside{Komentarz na boku}
-\response{Odpowiedź na komentarz w treści} \responseside{Odpowiedź na
-  komentarz na boku}
-
-\pwit{Dodałem makra umożliwiające komentowanie i odpowiedź na
-  komentarze. Wymagało to dodania wiersza do do iithesis.cls, ale nie
-  powinno mieć to wpływu na układ tekstu. Po napisaniu i
-  zaakceptowaniu pracy można te zmiany usunąć.}
-
-
 \chapter{Introduction}
-
-\pwit{W CAŁEJ pracy brakuje odnośników do literatury. Rozumiem np., że
-  poniższa sekcja przypomina podstawową terminologię dotyczącą pamięci
-  wirtualnej, ale pozostaje mnóstwo niuansów, których nie chcemy tu
-  omawiać. Czytelnik powinien się dowiedzieć, gdzie o tych niuansach
-  powinien przeczytać. Można dodać akapit o literaturze na początku
-  (mniej pracochłonne) lub przy każdym pojęciu umieścić odnośnik do
-  konkretnej strony/rodziału któregoś z podręczników (to jest
-  b. pracochłonne, być nie we wszystkich ale w niektórych miejscach
-  warto to zrobić)}
 
 \section{What is virtual memory?} \label{section:whatisvm}
 
@@ -750,9 +726,6 @@ The code listing below is a simplified version of the actual implementation of
 the \mintinline{c}{vmspace_fork} function. Fragments of code which deal with
 edge cases, synchronization and accounting have been removed for clarity.
 
-\pwit{Poniższy kod wymaga kilku/nastu zdań komentarza. Podobnie pozostały kod w
-  CAŁEJ pracy}
-
 \begin{code}
 \begin{minted}[fontsize=\small]{c}
 /*
@@ -1138,7 +1111,7 @@ vm_fault_hold(vm_map_t map, vm_offset_t vaddr, vm_prot_t fault_type)
     boolean_t wired;
     int behind, ahead;
 
-RetryFault:;
+RetryFault:
 
     /*
      * Find the backing store object and offset into it to begin the
@@ -1214,6 +1187,11 @@ RetryFault:;
                 /* Now we have the page to move to first_page */
                 break; /* Break to PAGE HAS BEEN FOUND. */
             }
+
+
+
+
+
 
             /*
              * If an I/O error occurred or the requested page was
@@ -1320,6 +1298,8 @@ address space using the \texttt{mmap} system call. It can create zero-filled
 anonymous mappings, as well as mappings whose contents are provided by a file.
 The \mintinline{c}{kern_mmap} function implements the whole system call.
 
+\vspace{50pt}
+
 \begin{code}
 \begin{minted}[fontsize=\small]{c}
 /*
@@ -1369,6 +1349,8 @@ kern_mmap(struct thread *td, uintptr_t addr, size_t size, int prot, int flags,
     size += pageoff;            /* low end... */
     size = (vm_size_t) round_page(size);    /* hi end */
 
+
+
     /* Check for illegal addresses. */
     if (flags & MAP_FIXED) {
         /*
@@ -1417,6 +1399,7 @@ kern_mmap(struct thread *td, uintptr_t addr, size_t size, int prot, int flags,
         error = vm_mmap_object(&vms->vm_map, &addr, size, prot,
             VM_PROT_ALL, flags, NULL, pos, FALSE, td);
     } else {
+
         /*
          * Mapping file, get fp for validation and don't let the
          * descriptor disappear on us if we block. Check capability
@@ -1568,8 +1551,9 @@ Any user process has at its disposal almost the entire 4GiB of virtual address
 space, and so does the kernel. This comes at a cost of a greater performance
 penalty when switching between executing user and kernel code. Previously, it
 wasn't necessary to flush the TLB (i.e. invalidate all entries) when jumping
-from user to kernel code and vice versa, but now it has become necessary to do
-so, which results in a higher rate of page faults.
+from user to kernel code and vice versa, but now, since it involves changing the
+current page table, it has become necessary to do so, which results in a
+higher rate of page faults.
 
 There remains a little bit of address space inside a user process that is still
 inaccessible to it. That part of the address space is called the
@@ -1751,7 +1735,7 @@ patterns from every page of physical memory (other than the ones containing the
 kernel). In order to be able to do that, pieces of kernel address space have to
 be reserved, for instance to temporarily map the physical page being tested.
 This is done in the \mintinline{c}{pmap_bootstrap} procedure, which is called
-from \mintinline{c}{getmemsize}. Its simplified code is presented below
+from \mintinline{c}{getmemsize}. Its simplified code is presented below.
 
 \begin{code}
 \begin{minted}[fontsize=\small]{c}
@@ -1762,6 +1746,7 @@ from \mintinline{c}{getmemsize}. Its simplified code is presented below
  *  in locore.s with the page table created in pmap_cold(),
  *  and just syncs the pmap module with what has already been done.
  */
+
 void
 pmap_bootstrap(vm_paddr_t firstaddr)
 {
