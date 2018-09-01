@@ -1921,6 +1921,20 @@ pmap_init(void)
     the \mintinline{c}{pmap_init} function}
 \end{code}
 
+\chapter{Conclusion}
+
+There remain many aspects of the FreeBSD virtual memory subsystem which have not
+been discussed in this thesis. However, the goal of this thesis has been not to
+provide a complete treatment, but to explain at a high level its foundations,
+which are the data structures and the role they play in performing the system's
+basic functions, while at the same time showing that real kernel source code is
+based on really simple algorithms and ideas.
+
+Unfortunately, real kernel code is less readable due to performance and
+concurrency concerns. Nevertheless, this text should make it easier for the
+reader to see the bigger picture and not be overwhelmed by the amount of noise
+while reading the sources.
+
 \begin{thebibliography}{99}
 
 \bibitem{bib:tanenbaum} Andrew S. Tanenbaum and Herbert Bos. 2014.
