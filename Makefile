@@ -6,7 +6,7 @@ thesis.pdf: thesis.tex
 	pdflatex -shell-escape $^
 
 clean:
-	rm -f thesis.{aux,log,out,toc}
+	rm -rf thesis.{aux,log,out,toc,fdb_latexmk,fls} _minted-thesis
 
 distclean: clean
 	rm -f thesis.pdf

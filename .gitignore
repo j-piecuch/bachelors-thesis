@@ -4,5 +4,8 @@
 *.prv
 *.toc
 *.aux
+*.fls
+*.fdb_latexmk
+_minted-thesis/*
 *_
 auto/*

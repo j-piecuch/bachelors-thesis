@@ -195,7 +195,7 @@ version of the source tree, while \ref{bxr} only presents the latest revision.
 On the other hand, \ref{bxr} has a more aesthetically pleasing interface, which
 includes syntax highlighting. All source code discussion and listings apply
 specifically to the \texttt{12-CURRENT} branch of the kernel, which is the
-latest revision and is still under development as of september 2018.
+latest revision and is still under development as of September 2018.
 
 The kernel source code can be found in the \texttt{/sys} directory of the tree.
 Since other parts of the tree are not going to be discussed, all subsequent
@@ -250,7 +250,7 @@ struct vmspace {
 
 The \mintinline{c}{vm_map} structure represents the machine-independent part of a
 virtual address space. It is structured as a tree of \mintinline{c}{vm_map_entry}
-structures, each of which describes a continous fragment of the address space.
+structures, each of which describes a continuous fragment of the address space.
 
 
 \begin{listing}[H]
@@ -699,7 +699,7 @@ the file.
 
 Once the program begins to execute, it accesses instructions and data using
 virtual addresses. Some of these accesses will generate \textbf{page faults},
-and the kernel has to handle them appropiately, fetching data from secondary
+and the kernel has to handle them appropriately, fetching data from secondary
 storage or terminating the process if it tried to access an unmapped region.
 
 A process can also modify the layout of its own address space. The \texttt{mmap}
@@ -1570,7 +1570,7 @@ The exact layout of the kernel virtual address space is as follows:
 \item \texttt{0x00400000 - 0x007fffff} (4-8MiB): Mapping of the same low memory,
   but this mapping isn't transient
 \item \texttt{0x00800000 - 0xffbfffff}: General purpose area containing kernel
-  text and data. Managed by the machine-independent part of the VM sybsystem.
+  text and data. Managed by the machine-independent part of the VM subsystem.
 \item \texttt{0xffc00000 - 0xffdfffff}: Recursive mapping of the kernel page
   table.
 \item \texttt{0xffe00000 - 0xffffffff}: Trampoline area shared between the
