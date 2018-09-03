@@ -37,7 +37,7 @@
 % \advisor{dr Jan Kowalski \and
 %     prof. Janina Nowak \fmlinebreak
 %     Instytut Informatyki \fmlinebreak
-%     Uniwersytet Jagielloński \fmlinebreak
+%     Uniwersytet Jagielloński \fmlinebreak
 %     (promotor pomocniczy)}
 %
 %%%%% PAKIETY WYMAGANE I DOLACZANE PRZEZ KLASE
@@ -55,9 +55,6 @@
 \setboolean{Decl@ration}{false}
 \newboolean{Many@Advisors}
 \setboolean{Many@Advisors}{false}
-
-\RequirePackage[textwidth=2.5cm]{todonotes}
-
 \newcommand \@thesislevel {}
 \newcommand \@studydegree {I}
 
@@ -233,4 +230,3 @@
 }
 
 \endinput
-
